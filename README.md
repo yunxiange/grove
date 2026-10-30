@@ -1,8 +1,8 @@
 # Grove · 墨与纸
 
-一个偏爱阅读的 Android GitHub 客户端。用暖白纸面、紧凑排版和清晰导航，浏览项目、阅读文档、收藏值得再看的内容。
+一个偏爱阅读的 GitHub 客户端。用暖白纸面、紧凑排版和清晰导航，浏览项目、阅读文档、收藏值得再看的内容。
 
-**Android 8.0+ · Kotlin + Jetpack Compose · 开发版 0.3.2**
+**目前仅支持 Android 8.0+ · Kotlin + Jetpack Compose · 开发版 0.3.2**
 
 <p align="center">
   <img src="docs/screenshots/overview.png" width="900" alt="Grove 产品界面：收藏搜索、最近访问、发现和个人页，四张实际页面叠放展示">
