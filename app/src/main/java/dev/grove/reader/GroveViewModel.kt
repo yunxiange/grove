@@ -16,6 +16,8 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 import java.net.URI
 
+data class FilePickerState(val directory:String,val files:List<RepoFile> = emptyList(),val loading:Boolean=true,val error:String?=null)
+
 data class GroveState(
     val destination: Destination = Destination.LIBRARY,
     val library: List<RepoId> = emptyList(), val projects: Map<String,Project> = emptyMap(),
@@ -28,6 +30,7 @@ data class GroveState(
     val document: Document? = null, val raw: Boolean = false, val immersive: Boolean = false,
     val progress: Float = 0f, val headings: List<Heading> = emptyList(),
     val directory: String = "", val files: List<RepoFile> = emptyList(), val branches: List<String> = emptyList(),
+    val filePicker:FilePickerState?=null,
     val issues: List<Issue> = emptyList(), val issue: Issue? = null, val closed: Boolean = false,
     val issuePage: Int = 1, val moreIssues: Boolean = false,
     val comments: List<IssueComment> = emptyList(), val commentPage: Int = 1, val moreComments: Boolean = false,
@@ -62,6 +65,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     val state = mutable.asStateFlow()
     private var libraryJob:Job?=null
     private var requestJob: Job? = null
+    private var filePickerJob:Job?=null
     private var authJob: Job? = null
     private var imageJob:Job?=null
     private var pendingImage:ImageDownload?=null
@@ -89,6 +93,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     private fun switchAccount(profile:UserProfile?) {
+        dismissFilePicker()
         resetStarIndex()
         imageJob?.cancel();pendingImage=null
         starJobs.values.forEach { it.cancel() };starJobs.clear();starRevision++
@@ -141,6 +146,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         else if(mutable.value.username.isNotBlank())loadStars()
     }
     fun navigate(destination: Destination) {
+        dismissFilePicker()
         pauseStarSearch()
         flushProgress(); requestJob?.cancel(); readingHistory.clear()
         mutable.update { it.copy(destination=destination,project=null,document=null,issue=null,immersive=false,loading=false,error=null,discoverRefreshing=false,savedRefreshing=false) }
@@ -156,6 +162,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         return true
     }
     fun openRepository(id: RepoId) {
+        dismissFilePicker()
         pauseStarSearch()
         flushProgress();readingHistory.clear()
         mutable.update { it.copy(project=it.projects[id.fullName] ?: Project(id),ref="main",tab=RepoTab.READ,document=null,raw=false,
@@ -173,6 +180,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(document=document,ref=document.ref,tab=RepoTab.READ,raw=false,progress=progress,headings=emptyList()) }
     }
     fun openBookmark(bookmark: Bookmark) {
+        dismissFilePicker()
         flushProgress();readingHistory.clear()
         mutable.update { it.copy(project=it.projects[bookmark.repo.fullName] ?: Project(bookmark.repo),ref=bookmark.ref,
             document=null,tab=RepoTab.READ,immersive=false,issue=null,headings=emptyList()) }
@@ -180,6 +188,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun resumeReading() { mutable.value.resume?.let { openBookmark(it);mutable.update { s -> s.copy(immersive=true) } } }
     fun openFile(path: String) {
+        dismissFilePicker()
         val s=mutable.value;val project=s.project ?: return
         flushProgress();s.document?.let { readingHistory.addLast(it) }
         mutable.update { it.copy(document=null,tab=RepoTab.READ,headings=emptyList(),progress=0f) }
@@ -188,6 +197,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     fun back() {
         val s=mutable.value
         when {
+            s.filePicker!=null -> dismissFilePicker()
             s.immersive -> mutable.update { it.copy(immersive=false) }
             s.issue != null -> mutable.update { it.copy(issue=null,comments=emptyList()) }
             s.tab==RepoTab.FILES && s.directory.isNotEmpty() -> loadDirectory(s.directory.substringBeforeLast('/',""))
@@ -197,6 +207,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun selectTab(tab: RepoTab) {
+        dismissFilePicker()
         mutable.update { it.copy(tab=tab,issue=null,error=null) }
         when(tab) {
             RepoTab.FILES -> loadDirectory(mutable.value.directory)
@@ -205,14 +216,47 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun loadDirectory(path: String) {
+        dismissFilePicker()
         val s=mutable.value;val project=s.project ?: return
         mutable.update { it.copy(directory=path,tab=RepoTab.FILES,files=emptyList()) }
         request { val files=api.directory(project.id,s.ref,path);mutable.update { it.copy(files=files) } }
+    }
+    fun openFilePicker() {
+        val s=mutable.value
+        if(s.tab!=RepoTab.READ||s.document==null)return
+        loadPickerDirectory(if(s.document.originUrl!=null)""else s.document.path.substringBeforeLast('/',""))
+    }
+    fun loadPickerDirectory(path:String) {
+        val s=mutable.value;val project=s.project?:return
+        if(s.tab!=RepoTab.READ||s.document==null)return
+        filePickerJob?.cancel()
+        mutable.update{it.copy(filePicker=FilePickerState(path))}
+        filePickerJob=viewModelScope.launch {
+            try {
+                val files=api.directory(project.id,s.ref,path)
+                mutable.update{it.copy(filePicker=FilePickerState(path,files,loading=false))}
+            }catch(e:CancellationException){throw e}
+            catch(e:Exception) {
+                if(e is GitHubException&&e.status==401){api.clearAccountFiles();vault.clear();switchAccount(null)}
+                else mutable.update{it.copy(filePicker=FilePickerState(path,loading=false,error=e.message?:"文件列表加载失败，请重试。"))}
+            }
+        }
+    }
+    fun dismissFilePicker() {
+        filePickerJob?.cancel();filePickerJob=null
+        mutable.update{it.copy(filePicker=null)}
+    }
+    fun selectPickerFile(file:RepoFile) {
+        if(mutable.value.filePicker==null)return
+        if(file.folder)loadPickerDirectory(file.path)
+        else if(file.path==mutable.value.document?.path)dismissFilePicker()
+        else openFile(file.path)
     }
     fun loadBranches() { val id=mutable.value.project?.id ?: return
         request { val branches=api.branches(id);mutable.update { it.copy(branches=branches) } }
     }
     fun chooseBranch(ref: String) {
+        dismissFilePicker()
         val s=mutable.value;val id=s.project?.id ?: return
         flushProgress();readingHistory.clear()
         mutable.update { it.copy(ref=ref,document=null,directory="",files=emptyList(),headings=emptyList()) }

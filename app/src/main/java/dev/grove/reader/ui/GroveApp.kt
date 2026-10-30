@@ -134,7 +134,7 @@ fun GroveApp(model:GroveViewModel) {
                     if(s.loading)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp),color=Muted,trackColor=Rule)
                     s.error?.let { ErrorNotice(it,model::retry) }
                     when(s.tab) {
-                        RepoTab.READ -> ReaderPage(s,model,{settings=true},{toc=true},{jump=null;model.selectTab(RepoTab.FILES)},::openLink,jump)
+                        RepoTab.READ -> ReaderPage(s,model,{settings=true},{toc=true},model::openFilePicker,::openLink,jump)
                         RepoTab.FILES -> FilesPage(s,model)
                         RepoTab.ISSUES -> IssuesPage(s,model,::openLink)
                     }
@@ -149,6 +149,39 @@ fun GroveApp(model:GroveViewModel) {
             }
         }
         if(add)AddRepositoryDialog({add=false},model::addRepository){add=false;importing=true;imports=true}
+        s.filePicker?.let{picker->
+            ModalBottomSheet(onDismissRequest=model::dismissFilePicker,containerColor=Paper,tonalElevation=0.dp,
+                sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true)) {
+                Column(Modifier.fillMaxWidth().heightIn(min=260.dp,max=540.dp)) {
+                    CompactHeader("选择文件",subtitle=s.project?.id?.name,
+                        onBack=if(picker.directory.isNotBlank())({model.loadPickerDirectory(picker.directory.substringBeforeLast('/',""))})else null) {
+                        IconButton(onClick=model::dismissFilePicker){Icon(Icons.Outlined.Close,"关闭文件面板",Modifier.size(19.dp))}
+                    }
+                    HorizontalDivider(color=Rule)
+                    var query by remember(picker.directory){mutableStateOf("")}
+                    Row(Modifier.fillMaxWidth().padding(start=14.dp,end=22.dp),verticalAlignment=Alignment.CenterVertically) {
+                        TextButton(onClick={model.loadPickerDirectory("")},enabled=picker.directory.isNotBlank(),modifier=Modifier.weight(1f)) {
+                            Text(if(picker.directory.isBlank())"/"else"/ ${picker.directory}",fontSize=11.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
+                        }
+                        Text(s.ref,fontSize=10.sp,color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.widthIn(max=100.dp))
+                    }
+                    OutlinedTextField(query,{query=it},modifier=Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=5.dp),
+                        placeholder={Text("筛选当前目录",fontSize=12.sp)},singleLine=true,leadingIcon={Icon(Icons.Outlined.Search,null,Modifier.size(17.dp))})
+                    if(picker.loading)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp),color=Muted,trackColor=Rule)
+                    picker.error?.let{ErrorNotice(it){model.loadPickerDirectory(picker.directory)}}
+                    val listState=rememberLazyListState()
+                    LaunchedEffect(picker.directory){listState.scrollToItem(0)}
+                    val files=picker.files.filter{it.name.contains(query,true)}
+                    LazyColumn(Modifier.weight(1f).fillMaxWidth(),state=listState,contentPadding=PaddingValues(horizontal=22.dp,vertical=9.dp)) {
+                        items(files,key={it.path}){file->RepositoryFileRow(file,file.path==s.document?.path){model.selectPickerFile(file)}}
+                        if(files.isEmpty()&&!picker.loading&&picker.error==null)item {
+                            Text(if(query.isBlank())"这个目录是空的。"else"没有匹配的文件。",Modifier.padding(vertical=24.dp),fontSize=12.sp,color=Muted)
+                        }
+                        if(picker.files.size>=1000)item{Text("此目录可能超过 GitHub Contents API 的显示上限。",Modifier.padding(vertical=15.dp),fontSize=11.sp,color=Muted)}
+                    }
+                }
+            }
+        }
         if(s.imageToSave!=null)ModalBottomSheet(onDismissRequest=model::dismissImageActions,containerColor=Paper) {
             Text("图片",Modifier.padding(start=24.dp,bottom=10.dp),fontFamily=FontFamily.Serif,fontSize=20.sp)
             Row(Modifier.fillMaxWidth().clickable(onClick=model::saveSelectedImage).padding(horizontal=24.dp,vertical=20.dp),verticalAlignment=Alignment.CenterVertically) {
@@ -625,13 +658,20 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
     }
     OutlinedTextField(query,{query=it},Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=5.dp),placeholder={Text("筛选当前目录",fontSize=12.sp)},singleLine=true,leadingIcon={Icon(Icons.Outlined.Search,null,Modifier.size(17.dp))})
     LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(horizontal=20.dp,vertical=9.dp)) {
-        items(s.files.filter{it.name.contains(query,true)},key={it.path}){f->Row(Modifier.fillMaxWidth().clickable {if(f.folder)model.loadDirectory(f.path)else model.openFile(f.path)}.padding(vertical=14.dp),verticalAlignment=Alignment.CenterVertically) {
-            Icon(if(f.folder)Icons.Outlined.Folder else if(f.name.endsWith(".pdf",true))Icons.Outlined.PictureAsPdf else if(f.name.substringAfterLast('.').lowercase() in listOf("png","jpg","jpeg","svg","gif","webp"))Icons.Outlined.Image else if(f.name.substringAfterLast('.').lowercase() in listOf("xlsx","xls","csv","tsv"))Icons.Outlined.TableChart else if(f.markdown)Icons.AutoMirrored.Outlined.MenuBook else Icons.Outlined.Description,null,Modifier.size(18.dp),tint=Muted)
-            Text(f.name,Modifier.weight(1f).padding(horizontal=12.dp),fontSize=12.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
-            if(!f.folder)Text(if(f.size>1024)"${f.size/1024} KB"else"${f.size} B",fontSize=9.sp,color=Muted)
-        }}
+        items(s.files.filter{it.name.contains(query,true)},key={it.path}){f->RepositoryFileRow(f){if(f.folder)model.loadDirectory(f.path)else model.openFile(f.path)}}
         if(s.files.size>=1000)item{Text("此目录可能超过 GitHub Contents API 的显示上限。",Modifier.padding(15.dp),fontSize=11.sp,color=Muted)}
         if(s.files.isEmpty()&&!s.loading&&s.error==null)item{EmptyNotice("这个目录是空的。","可以返回上一级继续浏览。",Icons.Outlined.Folder)}
+    }
+}
+
+@Composable private fun RepositoryFileRow(file:RepoFile,current:Boolean=false,onClick:()->Unit) {
+    Row(Modifier.fillMaxWidth().semantics{selected=current}.background(if(current)Color(0xFFEFEAE0)else Color.Transparent)
+        .clickable(onClick=onClick).padding(horizontal=if(current)8.dp else 0.dp,vertical=14.dp),verticalAlignment=Alignment.CenterVertically) {
+        Icon(if(file.folder)Icons.Outlined.Folder else if(file.name.endsWith(".pdf",true))Icons.Outlined.PictureAsPdf else if(file.name.substringAfterLast('.').lowercase() in listOf("png","jpg","jpeg","svg","gif","webp"))Icons.Outlined.Image else if(file.name.substringAfterLast('.').lowercase() in listOf("xlsx","xls","csv","tsv"))Icons.Outlined.TableChart else if(file.markdown)Icons.AutoMirrored.Outlined.MenuBook else Icons.Outlined.Description,null,Modifier.size(18.dp),tint=Muted)
+        Text(file.name,Modifier.weight(1f).padding(horizontal=12.dp),fontSize=12.sp,fontWeight=if(current)FontWeight.Medium else FontWeight.Normal,maxLines=1,overflow=TextOverflow.Ellipsis)
+        if(current)Text("正在阅读",fontSize=9.sp,color=Muted)
+        else if(!file.folder)Text(if(file.size>1024)"${file.size/1024} KB"else"${file.size} B",fontSize=9.sp,color=Muted)
+        else Icon(Icons.Outlined.ChevronRight,null,Modifier.size(14.dp),tint=Muted)
     }
 }
 
