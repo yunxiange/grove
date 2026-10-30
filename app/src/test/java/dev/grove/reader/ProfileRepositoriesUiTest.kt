@@ -7,6 +7,7 @@ import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.test.core.app.ApplicationProvider
 import dev.grove.reader.data.GitHubClient
 import dev.grove.reader.data.ReadingStore
@@ -39,6 +40,7 @@ class ProfileRepositoriesUiTest {
     private lateinit var app:Application
     private lateinit var model:GroveViewModel
     private val discoveryQueries=CopyOnWriteArrayList<String>()
+    private var longReadme=false
     private fun project(name:String,stars:Int=0)=JSONObject().put("owner",JSONObject().put("login","owner"))
         .put("name",name).put("description","A quiet place for project notes.").put("language","Kotlin")
         .put("stargazers_count",stars).put("private",name=="gamma").put("default_branch","main")
@@ -59,7 +61,7 @@ class ProfileRepositoriesUiTest {
                     JSONArray((0 until 205).drop((page-1)*count).take(count).map{project(if(it==204)"needle-final"else"star-$it",it)}).toString()
                 }
                 name=="readme" -> JSONObject().put("path","README.md").put("size",8).put("encoding","base64")
-                    .put("content",Base64.getEncoder().encodeToString("# Reading notes".toByteArray())).toString()
+                    .put("content",Base64.getEncoder().encodeToString((if(longReadme)"# Reading notes\n\n"+"A long reading paragraph.\n".repeat(150)else"# Reading notes").toByteArray())).toString()
                 else -> project(name,when(name){"beta"->100;"gamma"->50;else->10}).toString()
             }.toByteArray()
             object:HttpURLConnection(url) {
@@ -129,7 +131,7 @@ class ProfileRepositoriesUiTest {
     @Test fun recentProjectsCanSortAndRemoveWithoutDeletingBookmarks() {
         open("beta");compose.runOnIdle{model.toggleBookmark()}
         open("gamma");open("alpha")
-        compose.runOnIdle{model.navigate(Destination.LIBRARY)}
+        compose.runOnIdle{model.back()}
         assertEquals("alpha",model.state.value.recentVisits.first().repo.name)
         compose.onNodeWithContentDescription("排序最近项目").performClick()
         compose.onNodeWithText("Star 数").performClick()
@@ -178,11 +180,11 @@ class ProfileRepositoriesUiTest {
         compose.onNodeWithText("留一枚书签。").assertDoesNotExist()
     }
     @Test fun libraryViewChoiceSurvivesBottomNavigation() {
-        open("alpha");compose.runOnIdle{model.navigate(Destination.LIBRARY)}
+        open("alpha");compose.runOnIdle{model.back()}
         compose.onNodeWithContentDescription("封面视图").performClick()
         compose.onNodeWithContentDescription("列表视图").assertIsDisplayed()
         compose.onNodeWithText("我的").performClick()
-        compose.onNodeWithText("仓库").performClick()
+        compose.onNodeWithText("足迹").performClick()
         compose.onNodeWithContentDescription("列表视图").assertIsDisplayed()
     }
     @Test fun libraryViewChoiceSurvivesViewModelRestartAndIsolatedFromGuest() {
@@ -193,7 +195,7 @@ class ProfileRepositoriesUiTest {
         assertTrue(ReadingStore(app,"100").libraryGrid)
     }
     @Test fun recentProjectsCanPinAndUnpinInBothViews() {
-        open("beta");open("alpha");compose.runOnIdle{model.navigate(Destination.LIBRARY)}
+        open("beta");open("alpha");compose.runOnIdle{model.back()}
         compose.onNodeWithContentDescription("项目操作 owner/beta").performClick()
         compose.onNodeWithText("置顶项目").performClick()
         assertTrue(ReadingStore(app,"100").recentVisits().first{it.repo.name=="beta"}.pinned)
@@ -221,5 +223,31 @@ class ProfileRepositoriesUiTest {
         assertEquals("",model.state.value.discoveryQuery)
         compose.onNode(hasSetTextAction()).assertDoesNotExist()
         assertTrue(discoveryQueries.last().contains("stars:>10"))
+    }
+    @Test fun bottomTabsRestoreProjectsAndReselectingFootprintsReturnsHome() {
+        open("alpha")
+        compose.onNodeWithText("我的").performClick()
+        open("beta")
+        compose.onNodeWithText("足迹").performClick()
+        compose.onNodeWithText("alpha").assertIsDisplayed()
+        assertEquals("alpha",model.state.value.project!!.id.name)
+        compose.onNodeWithText("足迹").performClick()
+        compose.onNodeWithText("访问记录").assertIsDisplayed()
+        assertNull(model.state.value.project)
+        snapshot("footprint-navigation")
+        compose.onNodeWithText("我的").performClick()
+        assertEquals("beta",model.state.value.project!!.id.name)
+    }
+    @Test fun sourceScrollAndModeSurviveBottomNavigation() {
+        longReadme=true;open("alpha")
+        compose.onNodeWithText("源码").performClick()
+        val scroll=compose.onNode(hasScrollAction())
+        scroll.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.ScrollBy){it(0f,500f)}
+        val before=scroll.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+        assertTrue(before>0f)
+        compose.onNodeWithText("我的").performClick()
+        compose.onNodeWithText("足迹").performClick()
+        assertTrue(model.state.value.raw)
+        assertEquals(before,compose.onNode(hasScrollAction()).fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(),.001f)
     }
 }

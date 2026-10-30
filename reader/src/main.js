@@ -10,38 +10,79 @@ let contentReady=false;
 const endObserver=createEndObserver(()=>({y:scrollY,height:innerHeight,total:document.documentElement.scrollHeight}),
   (id,page)=>window.Grove?.reachedEnd(id,page));
 const checkEnd=()=>{if(contentReady)endObserver.check();};
+const layoutPreviewImage=image=>{
+  if(!image.naturalWidth||!image.naturalHeight)return;
+  const vector=image.classList.contains('vector-preview');
+  const width=vector?(article.clientWidth||innerWidth)*(image.classList.contains('original')?2:1):image.naturalWidth;
+  image.style.width=width+'px';
+  image.style.height=(width*image.naturalHeight/image.naturalWidth)+'px';
+  if(vector)image.style.maxHeight='none';
+};
+const updatePreviewViewport=()=>{
+  if(innerHeight>0)document.documentElement.style.setProperty('--preview-height',innerHeight+'px');
+  const image=article.querySelector('.preview-image');
+  if(image)layoutPreviewImage(image);
+};
+const finishRender=(payload,generation,top,describe)=>{
+  requestAnimationFrame(()=>{
+    if(generation!==rendering)return;
+    window.scrollTo({left:0,top:typeof top==='function'?top():top,behavior:'instant'});
+    contentReady=true;checkEnd();
+    requestAnimationFrame(()=>{
+      if(generation!==rendering)return;
+      if(describe)window.Grove?.previewStatus?.(payload.id,describe());
+      window.Grove?.previewPresented?.(payload.id);
+    });
+  });
+};
+const imageStatus=image=>{
+  const r=image.getBoundingClientRect(),style=getComputedStyle(image);
+  return `图片已解码 ${image.naturalWidth} × ${image.naturalHeight}；元素 ${Math.round(r.width)} × ${Math.round(r.height)} @ ${Math.round(r.left)},${Math.round(r.top)}；样式高度 ${style.height} / 上限 ${style.maxHeight}；视口 ${innerWidth} × ${innerHeight}`;
+};
 
-window.renderDocument=async payload=>{
+const renderDocument=async payload=>{
   const generation=++rendering;
   const isNew=active?.id!==payload.id;
   const previous=active;
   const oldY=scrollY;
   active=payload;
   endObserver.setPage(payload.id,payload.endPage);
-  if(contentReady&&!isNew&&previous.content===payload.content&&previous.fontSize===payload.fontSize&&previous.warm===payload.warm&&previous.attachmentUrl===payload.attachmentUrl) {
+  if(contentReady&&!isNew&&previous.content===payload.content&&previous.fontSize===payload.fontSize&&previous.warm===payload.warm&&previous.attachmentUrl===payload.attachmentUrl&&previous.attachmentMimeType===payload.attachmentMimeType) {
     requestAnimationFrame(()=>{if(generation===rendering)checkEnd();});return;
   }
   contentReady=false;
+  updatePreviewViewport();
   document.documentElement.style.setProperty('--font-size',payload.fontSize+'px');
   document.body.classList.toggle('warm',payload.warm);
   document.body.classList.toggle('attachment-preview',payload.kind==='image'||payload.kind==='spreadsheet');
   article.replaceChildren();
   if(payload.kind==='image') {
     const image=document.createElement('img');image.className='preview-image';image.alt='图片预览';image.src=payload.attachmentUrl;
-    const hint=document.createElement('p');hint.className='image-hint';hint.textContent='双指缩放 · 双击原图 · 长按保存';
-    image.ondblclick=()=>image.classList.toggle('original');
-    image.onerror=()=>{hint.textContent='图片加载失败，可返回文件列表后重试。'};
-    article.append(hint,image);window.Grove?.headings(payload.id,'[]');return;
+    const vector=payload.attachmentMimeType==='image/svg+xml';
+    image.classList.toggle('vector-preview',vector);
+    const hint=document.createElement('p');hint.className='image-hint';hint.textContent=vector?'双指缩放 · 双击放大 · 长按保存':'双指缩放 · 双击原图 · 长按保存';
+    image.ondblclick=()=>{image.classList.toggle('original');layoutPreviewImage(image);};
+    image.onload=()=>{
+      // SVGs with only a viewBox can retain a zero auto size in Android WebView.
+      // Supply decoded dimensions while CSS still constrains the image to the viewport.
+      image.width=image.naturalWidth;image.height=image.naturalHeight;
+      updatePreviewViewport();
+      finishRender(payload,generation,0,()=>imageStatus(image));
+    };
+    image.onerror=()=>{hint.textContent='图片加载失败，可返回文件列表后重试。';window.Grove?.renderFailed?.(payload.id);};
+    article.append(hint,image);window.Grove?.previewStatus?.(payload.id,`图片节点已创建；视口 ${innerWidth} × ${innerHeight}`);window.Grove?.headings(payload.id,'[]');return;
   }
   if(payload.kind==='spreadsheet') {
     article.textContent='正在读取工作簿…';
+    window.Grove?.previewStatus?.(payload.id,'正在读取本地表格');
     try {
       const {readWorkbook,showWorkbook}=await import('./spreadsheet.js');
       const response=await fetch(payload.attachmentUrl);if(!response.ok)throw Error();
       const book=readWorkbook(new Uint8Array(await response.arrayBuffer()));
       if(generation!==rendering)return;
       showWorkbook(article,book);
-    }catch {article.textContent='无法读取工作簿，可能已加密、损坏或超过预览范围。'}
+      finishRender(payload,generation,0,()=>`表格已渲染 ${article.querySelectorAll('tbody tr').length} 行；滚动 ${Math.round(scrollY)}；视口 ${innerWidth} × ${innerHeight}`);
+    }catch {if(generation!==rendering)return;article.textContent='无法读取工作簿，可能已加密、损坏或超过预览范围。';window.Grove?.renderFailed?.(payload.id);}
     window.Grove?.headings(payload.id,'[]');return;
   }
   article.innerHTML=sanitizeMarkdown(md.render(payload.content),DOMPurify);
@@ -66,11 +107,7 @@ window.renderDocument=async payload=>{
   }
   if(generation!==rendering)return;
   window.Grove?.headings(payload.id,JSON.stringify(headings));
-  requestAnimationFrame(()=>{
-    if(generation!==rendering)return;
-    window.scrollTo({left:0,top:isNew?(document.documentElement.scrollHeight-innerHeight)*payload.progress:oldY,behavior:'instant'});
-    contentReady=true;checkEnd();
-  });
+  finishRender(payload,generation,()=>isNew?(document.documentElement.scrollHeight-innerHeight)*payload.progress:oldY);
 };
 window.scrollToHeading=id=>document.getElementById(id)?.scrollIntoView({behavior:'smooth',block:'start'});
 document.addEventListener('click',event=>{
@@ -91,4 +128,10 @@ window.addEventListener('scroll',()=>{
     window.Grove?.progress(active.id,max>0?Math.min(1,scrollY/max):1);
   },180);
 },{passive:true});
-window.addEventListener('resize',checkEnd);
+window.addEventListener('resize',()=>{updatePreviewViewport();checkEnd();});
+window.renderDocument=payload=>renderDocument(payload).catch(()=>{
+  if(active?.id!==payload.id)return;
+  article.textContent='预览加载失败，请重新加载。';
+  window.Grove?.renderFailed?.(payload.id);
+});
+window.Grove?.readerReady?.();

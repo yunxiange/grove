@@ -10,10 +10,18 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebResourceError
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewCompat
 import dev.grove.reader.domain.Document
 import dev.grove.reader.domain.Heading
 import org.json.JSONArray
@@ -30,7 +38,7 @@ fun DocumentReader(document: Document,fontSize: Int,warm: Boolean,initialProgres
     onImage:(String)->Unit=onLink,
     imageResource:((Document,String)->Pair<String,ByteArray>?)?=null,
     onImageLongPress:((Document,String)->Unit)?=null,
-    endPage:Int?=null,onEnd:(()->Unit)?=null) {
+    endPage:Int?=null,onEnd:(()->Unit)?=null,diagnostics:PreviewDiagnostics?=null) {
     val link by rememberUpdatedState(onLink)
     val progressCallback by rememberUpdatedState(onProgress)
     val headingsCallback by rememberUpdatedState(onHeadings)
@@ -40,21 +48,38 @@ fun DocumentReader(document: Document,fontSize: Int,warm: Boolean,initialProgres
     val resourceCallback by rememberUpdatedState(imageResource)
     val endCallback by rememberUpdatedState(onEnd)
     val currentEndPage by rememberUpdatedState(endPage)
+    val currentDiagnostics by rememberUpdatedState(diagnostics)
+    var previewError by remember(document.key){mutableStateOf<String?>(null)}
+    var attempt by remember{mutableIntStateOf(0)}
+    val showError by rememberUpdatedState<(String)->Unit>({previewError=it})
     // Reading position is restored only when the document changes, not after every scroll event.
     val initial = remember(document.key) { initialProgress }
     val payload=remember(document,fontSize,warm,endPage) { JSONObject().put("id",document.key).put("content",document.content)
         .put("url",document.url).put("fontSize",fontSize).put("warm",warm).put("progress",initial.toDouble())
         .put("kind",document.attachment?.kind?.name?.lowercase()?:"markdown").put("endPage",endPage?:JSONObject.NULL)
+        .put("attachmentMimeType",document.attachment?.mimeType?:"")
         .put("attachmentUrl",document.attachment?.let{"https://appassets.androidplatform.net/attachment/"+File(it.localPath).name}?:"").toString() }
-    AndroidView(modifier=modifier,factory={context->
+    Box(modifier) {
+    key(attempt) {
+    AndroidView(modifier=Modifier.fillMaxSize(),factory={context->
         val loader=WebViewAssetLoader.Builder().addPathHandler("/assets/",WebViewAssetLoader.AssetsPathHandler(context))
             .addPathHandler("/attachment/"){path->
                 val attachment=currentDocument.attachment
                 val file=attachment?.let{File(it.localPath)}
-                if(file!=null&&path==file.name&&file.exists())WebResourceResponse(attachment.mimeType,null,file.inputStream())
-                else WebResourceResponse("text/plain","utf-8",404,"Not Found",emptyMap(),ByteArrayInputStream(ByteArray(0)))
+                if(file!=null&&path==file.name&&file.isFile&&file.length()>0) {
+                    currentDiagnostics?.attachmentResult="200 · ${file.length()} 字节 · ${attachment.mimeType}"
+                    WebResourceResponse(attachment.mimeType,null,200,"OK",mapOf("Cache-Control" to "no-store"),file.inputStream())
+                } else {
+                    currentDiagnostics?.attachmentResult="404 · 缓存不存在或未匹配"
+                    WebResourceResponse("text/plain","utf-8",404,"Not Found",emptyMap(),ByteArrayInputStream(ByteArray(0)))
+                }
             }.build()
         PaperWebView(context).apply {
+            currentDiagnostics?.webViewVersion=WebViewCompat.getCurrentWebViewPackage(context)?.let{"${it.packageName} ${it.versionName}"}?:"无法获取版本"
+            onBoundsChanged={w,h->currentDiagnostics?.viewport="$w × $h px"}
+            onRenderResult={id,result->if(id==currentDocument.key)currentDiagnostics?.renderResult=result}
+            onFrameState={currentDiagnostics?.frameResult=it}
+            onFailure={showError(it)}
             setBackgroundColor(android.graphics.Color.rgb(249,247,241))
             settings.javaScriptEnabled=true;settings.allowFileAccess=false;settings.allowContentAccess=false
             settings.domStorageEnabled=false;settings.mixedContentMode=android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
@@ -69,6 +94,19 @@ fun DocumentReader(document: Document,fontSize: Int,warm: Boolean,initialProgres
                 }else false
             }
             addJavascriptInterface(object {
+                @JavascriptInterface fun readerReady() {post {currentDiagnostics?.rendererReady=true;rendererReady()}}
+                @JavascriptInterface fun previewStatus(id:String,status:String) {post {
+                    if(id==currentDocument.key)currentDiagnostics?.contentResult=status.take(160)
+                }}
+                @JavascriptInterface fun previewPresented(id:String) {post {
+                    if(id==currentDocument.key) {
+                        if(currentDocument.attachment!=null)scrollTo(0,0)
+                        presentFrame()
+                    }
+                }}
+                @JavascriptInterface fun renderFailed(id:String) {post {
+                    if(id.isBlank()||id==currentDocument.key)fail("预览加载失败，请重新加载。")
+                }}
                 @JavascriptInterface fun openLink(url:String) {post {link(url)}}
                 @JavascriptInterface fun openImage(url:String) {post {imageCallback(url)}}
                 @JavascriptInterface fun copyCode(text:String) {post {
@@ -96,25 +134,85 @@ fun DocumentReader(document: Document,fontSize: Int,warm: Boolean,initialProgres
                     return null
                 }
                 override fun shouldOverrideUrlLoading(view:WebView?,request:WebResourceRequest):Boolean {link(request.url.toString());return true}
-                override fun onPageFinished(view:WebView?,url:String?) {ready=true;render()}
+                override fun onPageStarted(view:WebView?,url:String?,favicon:android.graphics.Bitmap?) {
+                    currentDiagnostics?.pageLoaded=false;currentDiagnostics?.rendererReady=false;resetRenderer()
+                }
+                override fun onPageFinished(view:WebView?,url:String?) {currentDiagnostics?.pageLoaded=true;render()}
+                override fun onReceivedError(view:WebView?,request:WebResourceRequest,error:WebResourceError) {
+                    if(request.isForMainFrame||(request.url.host=="appassets.androidplatform.net"&&request.url.path.orEmpty().endsWith(".js")))
+                        fail("预览组件加载失败，请重新加载。")
+                }
+                override fun onReceivedHttpError(view:WebView?,request:WebResourceRequest,response:WebResourceResponse) {
+                    if(request.isForMainFrame||(request.url.host=="appassets.androidplatform.net"&&request.url.path.orEmpty().endsWith(".js")))
+                        fail("预览组件加载失败，请重新加载。")
+                }
             }
+            resetRenderer()
             loadUrl("https://appassets.androidplatform.net/assets/reader/index.html")
         }
     },update={view->
+        val layer=if(currentDiagnostics?.softwareRendering==true)android.view.View.LAYER_TYPE_SOFTWARE else android.view.View.LAYER_TYPE_NONE
+        if(view.layerType!=layer){view.setLayerType(layer,null);view.requestLayout();view.presentFrame()}
         if(view.payload!=payload) {view.payload=payload;view.render()}
         if(heading!=null&&view.lastHeading!=heading) {view.lastHeading=heading;view.evaluateJavascript("window.scrollToHeading(${JSONObject.quote(heading)})",null)}
         if(heading==null)view.lastHeading=null
-    },onRelease={view->view.removeJavascriptInterface("Grove");view.stopLoading();view.destroy()})
+    },onRelease={view->view.releaseRenderer();view.removeJavascriptInterface("Grove");view.stopLoading();view.destroy()})
+    }
+    previewError?.let{message->
+        Column(Modifier.fillMaxSize().background(Paper).padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.Center) {
+            Text(message,color=Muted)
+            TextButton(onClick={previewError=null;attempt++}){Text("重新加载预览")}
+        }
+    }
+    }
 }
 
 private class PaperWebView(context:Context):WebView(context) {
     var lastEnd:Pair<String,Int>?=null
-    var ready=false
+    private var ready=false
+    private var disposed=false
+    var onFailure:(String)->Unit={}
+    var onBoundsChanged:(Int,Int)->Unit={_,_->}
+    var onRenderResult:(String,String)->Unit={_,_->}
+    var onFrameState:(String)->Unit={}
+    private var frameRequest=0L
+    private var drawPending=false
     var payload=""
     private var rendered=""
+    private var inFlight:String?=null
+    private val readyTimeout=Runnable{if(!ready&&!disposed)onFailure("预览组件未能启动，请重新加载或更新 Android System WebView。")}
     var lastHeading:String?=null
-    fun render() {if(ready&&payload.isNotBlank()&&rendered!=payload) {
-        rendered=payload
-        evaluateJavascript("window.renderDocument&&window.renderDocument($payload)",null)
+    override fun onSizeChanged(w:Int,h:Int,oldw:Int,oldh:Int){super.onSizeChanged(w,h,oldw,oldh);onBoundsChanged(w,h)}
+    override fun onDraw(canvas:android.graphics.Canvas) {
+        super.onDraw(canvas)
+        if(drawPending&&!disposed){drawPending=false;onFrameState("已执行绘制")}
+    }
+    fun presentFrame() {
+        if(disposed)return
+        onFrameState("已请求显示帧")
+        postInvalidateOnAnimation()
+        postVisualStateCallback(++frameRequest,object:VisualStateCallback() {
+            override fun onComplete(requestId:Long) {
+                if(disposed||requestId!=frameRequest)return
+                onFrameState("内容帧已就绪，等待绘制")
+                drawPending=true;invalidate()
+            }
+        })
+    }
+    fun resetRenderer() {ready=false;rendered="";inFlight=null;removeCallbacks(readyTimeout);postDelayed(readyTimeout,15000)}
+    fun rendererReady() {if(!disposed){ready=true;removeCallbacks(readyTimeout);render()}}
+    fun releaseRenderer(){disposed=true;removeCallbacks(readyTimeout)}
+    fun fail(message:String){if(!disposed)onFailure(message)}
+    fun render() {if(!disposed&&ready&&payload.isNotBlank()&&rendered!=payload&&inFlight==null) {
+        val requested=payload
+        val id=JSONObject(requested).optString("id")
+        onRenderResult(id,"已发送，等待 WebView 返回")
+        inFlight=requested
+        evaluateJavascript("(function(){if(typeof window.renderDocument!=='function')return false;window.renderDocument($requested);return true;})()"){accepted->
+            if(disposed)return@evaluateJavascript
+            inFlight=null
+            if(accepted=="true") {onRenderResult(id,"已受理");rendered=requested;if(payload!=requested)render()}
+            else {onRenderResult(id,"未受理：${accepted?:"无返回"}");ready=false;onFailure("预览启动失败，请重新加载。")}
+        }
     }}
 }

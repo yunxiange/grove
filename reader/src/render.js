@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it';
+import cjkFriendly from 'markdown-it-cjk-friendly';
 import texmath from 'markdown-it-texmath';
 import taskLists from 'markdown-it-task-lists';
 import katex from 'katex';
@@ -10,7 +11,7 @@ export function createRenderer() {
       try {return hljs.highlight(code,{language,ignoreIllegals:true}).value;} catch {}
     }
     return '';
-  }}).use(texmath,{engine:{renderToString(tex,options){
+  }}).use(cjkFriendly).use(texmath,{engine:{renderToString(tex,options){
     return '<span class="grove-math" data-display="'+(options.displayMode?'block':'inline')+'">'+md.utils.escapeHtml(tex)+'</span>';
   }},delimiters:'dollars',katexOptions:{throwOnError:false,trust:false,maxExpand:1000}})
     .use(taskLists,{enabled:false,label:false});

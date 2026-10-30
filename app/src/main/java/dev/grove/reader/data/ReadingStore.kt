@@ -58,6 +58,9 @@ class ReadingStore(context: Context, accountId: String = "anonymous") {
     var warm: Boolean
         get() = prefs.getBoolean("warm", false)
         set(value) { prefs.edit().putBoolean("warm", value).apply() }
+    var previewDiagnosticsEnabled:Boolean
+        get()=prefs.getBoolean("previewDiagnosticsEnabled",false)
+        set(value){prefs.edit().putBoolean("previewDiagnosticsEnabled",value).apply()}
     private fun array(key: String): List<Any> = runCatching { JSONArray(prefs.getString(key,"[]")).let { a -> (0 until a.length()).map { a.get(it) } } }.getOrDefault(emptyList())
     private fun bookmarkJson(value: Bookmark) = JSONObject().put("repo",value.repo.fullName).put("ref",value.ref).put("path",value.path).put("progress",value.progress.toDouble())
     private fun parseBookmark(json: JSONObject?): Bookmark? {

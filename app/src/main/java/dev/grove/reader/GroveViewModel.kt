@@ -34,6 +34,7 @@ data class GroveState(
     val issues: List<Issue> = emptyList(), val issue: Issue? = null, val closed: Boolean = false,
     val issuePage: Int = 1, val moreIssues: Boolean = false,
     val comments: List<IssueComment> = emptyList(), val commentPage: Int = 1, val moreComments: Boolean = false,
+    val issueProgress:Float=0f,
     val category: Category = Category.ALL, val language: String = "", val newProjects: Boolean = false,
     val discoveryQuery:String="",
     val discoveries: List<Project> = emptyList(), val discoverPage: Int = 1, val moreDiscoveries: Boolean = false,
@@ -44,6 +45,7 @@ data class GroveState(
     val authDevice: DeviceAuthorization? = null, val authBusy: Boolean = false, val authError: String? = null,
     val starStates: Map<String,Boolean> = emptyMap(), val starBusy: Set<String> = emptySet(), val starError: String? = null,
     val fontSize: Int = 17, val warm: Boolean = false, val loading: Boolean = false, val error: String? = null,
+    val previewDiagnosticsEnabled:Boolean=false,
 )
 
 class GroveViewModel(application: Application) : AndroidViewModel(application) {
@@ -61,7 +63,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         if(!vault.updateIfRevision(revision,fresh))throw CancellationException("登录状态已改变")
         fresh.accessToken
     }
-    private val mutable = MutableStateFlow(GroveState(library=store.library(),recentVisits=store.recentVisits(),recentSort=store.recentSort,libraryGrid=store.libraryGrid,bookmarks=store.bookmarks(),resume=store.resume(),fontSize=store.fontSize,warm=store.warm))
+    private val mutable = MutableStateFlow(GroveState(library=store.library(),recentVisits=store.recentVisits(),recentSort=store.recentSort,libraryGrid=store.libraryGrid,bookmarks=store.bookmarks(),resume=store.resume(),fontSize=store.fontSize,warm=store.warm,previewDiagnosticsEnabled=store.previewDiagnosticsEnabled))
     val state = mutable.asStateFlow()
     private var libraryJob:Job?=null
     private var requestJob: Job? = null
@@ -79,6 +81,8 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     private var lastSaved = 0L
     private var lastRequest: (suspend () -> Unit)? = null
     private val readingHistory = ArrayDeque<Document>()
+    private data class TabSession(val screen:GroveState,val history:List<Document>,val retry:(suspend()->Unit)?,val pending:Boolean)
+    private val tabSessions=mutableMapOf<Destination,TabSession>()
     init {
         mutable.update{it.copy(username=vault.login())}
         refreshLibrary()
@@ -97,9 +101,9 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         resetStarIndex()
         imageJob?.cancel();pendingImage=null
         starJobs.values.forEach { it.cancel() };starJobs.clear();starRevision++
-        requestJob?.cancel();libraryJob?.cancel();readingHistory.clear();lastRequest=null
+        requestJob?.cancel();libraryJob?.cancel();readingHistory.clear();lastRequest=null;tabSessions.clear()
         store=ReadingStore(getApplication(),profile?.id?:"anonymous")
-        mutable.value=GroveState(username=profile?.login.orEmpty(),library=store.library(),recentVisits=store.recentVisits(),recentSort=store.recentSort,libraryGrid=store.libraryGrid,bookmarks=store.bookmarks(),resume=store.resume(),fontSize=store.fontSize,warm=store.warm,destination=Destination.PROFILE)
+        mutable.value=GroveState(username=profile?.login.orEmpty(),library=store.library(),recentVisits=store.recentVisits(),recentSort=store.recentSort,libraryGrid=store.libraryGrid,bookmarks=store.bookmarks(),resume=store.resume(),fontSize=store.fontSize,warm=store.warm,previewDiagnosticsEnabled=store.previewDiagnosticsEnabled,destination=Destination.PROFILE)
         refreshLibrary()
     }
     private fun request(block: suspend () -> Unit) {
@@ -134,7 +138,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         val visits=store.setVisitPinned(repo,!visit.pinned);mutable.update{it.copy(recentVisits=visits)}
     }
     fun openSaved(bookmarks:Boolean) {
-        mutable.update{it.copy(savedBookmarks=bookmarks)};navigate(Destination.SAVED)
+        mutable.update{it.copy(savedBookmarks=bookmarks)};switchDestination(Destination.SAVED,restore=false)
     }
     fun selectSavedTab(bookmarks:Boolean) {
         if(mutable.value.savedBookmarks==bookmarks)return
@@ -146,14 +150,47 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         else if(mutable.value.username.isNotBlank())loadStars()
     }
     fun navigate(destination: Destination) {
+        if(destination==Destination.LIBRARY&&destination==mutable.value.destination&&mutable.value.project!=null) {
+            returnToHome()
+        } else switchDestination(destination,restore=true)
+    }
+    private fun switchDestination(destination:Destination,restore:Boolean) {
+        if(restore&&destination==mutable.value.destination)return
         dismissFilePicker()
         pauseStarSearch()
-        flushProgress(); requestJob?.cancel(); readingHistory.clear()
-        mutable.update { it.copy(destination=destination,project=null,document=null,issue=null,immersive=false,loading=false,error=null,discoverRefreshing=false,savedRefreshing=false) }
-        if(destination==Destination.DISCOVER && mutable.value.discoveries.isEmpty()) discover()
-        if(destination==Destination.SAVED&&!mutable.value.savedBookmarks&&mutable.value.username.isNotBlank()) {
-            if(mutable.value.starSearchQuery.isNotBlank())searchStars(mutable.value.starSearchQuery)else loadStars()
+        flushProgress()
+        val previous=mutable.value
+        tabSessions[previous.destination]=TabSession(previous,readingHistory.toList(),lastRequest,previous.loading)
+        requestJob?.cancel();readingHistory.clear()
+        if(!restore)tabSessions.remove(destination)
+        val saved=tabSessions[destination]
+        readingHistory.addAll(saved?.history.orEmpty());lastRequest=saved?.retry
+        restoreRepositoryScreen(destination,saved?.screen)
+        if(saved?.pending==true&&saved.retry!=null)request(saved.retry)
+        else if(mutable.value.project==null) {
+            if(destination==Destination.DISCOVER&&saved==null)discover()
+            if(destination==Destination.SAVED&&!mutable.value.savedBookmarks&&mutable.value.username.isNotBlank()) {
+                if(mutable.value.starSearchQuery.isNotBlank())searchStars(mutable.value.starSearchQuery)
+                else if(saved==null||mutable.value.stars.isEmpty())loadStars()
+            }
         }
+    }
+    // Restore only repository UI state. Account data, visits, bookmarks, Stars and filters stay shared and current.
+    private fun restoreRepositoryScreen(destination:Destination,screen:GroveState?) {
+        val saved=screen?:GroveState()
+        mutable.update{current->current.copy(destination=destination,
+            project=saved.project?.let{current.projects[it.id.fullName]?:it},ref=saved.ref,tab=saved.tab,document=saved.document,
+            raw=saved.raw,immersive=saved.immersive,progress=saved.progress,headings=saved.headings,
+            directory=saved.directory,files=saved.files,branches=saved.branches,
+            issues=saved.issues,issue=saved.issue,closed=saved.closed,issuePage=saved.issuePage,moreIssues=saved.moreIssues,
+            comments=saved.comments,commentPage=saved.commentPage,moreComments=saved.moreComments,issueProgress=saved.issueProgress,
+            filePicker=null,loading=false,error=saved.error,discoverRefreshing=false,savedRefreshing=false)}
+    }
+    private fun returnToHome() {
+        dismissFilePicker();flushProgress();requestJob?.cancel();readingHistory.clear();lastRequest=null
+        val destination=mutable.value.destination
+        tabSessions.remove(destination)
+        restoreRepositoryScreen(destination,null)
     }
     fun addRepository(value: String): Boolean {
         val id = RepoId.parse(value) ?: return false
@@ -203,7 +240,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
             s.tab==RepoTab.FILES && s.directory.isNotEmpty() -> loadDirectory(s.directory.substringBeforeLast('/',""))
             readingHistory.isNotEmpty() && s.tab==RepoTab.READ -> { flushProgress();display(readingHistory.removeLast()) }
             s.tab!=RepoTab.READ -> selectTab(RepoTab.READ)
-            else -> navigate(s.destination)
+            else -> returnToHome()
         }
     }
     fun selectTab(tab: RepoTab) {
@@ -285,6 +322,10 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun settings(font: Int=mutable.value.fontSize,warm: Boolean=mutable.value.warm) {
         store.fontSize=font.coerceIn(13,24);store.warm=warm;mutable.update { it.copy(fontSize=store.fontSize,warm=warm) }
+    }
+    fun setPreviewDiagnosticsEnabled(enabled:Boolean) {
+        store.previewDiagnosticsEnabled=enabled
+        mutable.update{it.copy(previewDiagnosticsEnabled=enabled)}
     }
     fun previewImage(url:String) {
         val doc=mutable.value.document?:return
@@ -381,7 +422,11 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(closed=closed,issues=if(more)it.issues else emptyList(),issue=null) }
         request { val (issues,hasMore)=api.issues(id,closed,page);mutable.update { it.copy(issues=if(more)s.issues+issues else issues,issuePage=page,moreIssues=hasMore) } }
     }
-    fun openIssue(issue: Issue) { mutable.update { it.copy(issue=issue,comments=emptyList(),commentPage=1,moreComments=false) };loadComments() }
+    fun openIssue(issue: Issue) { mutable.update { it.copy(issue=issue,comments=emptyList(),commentPage=1,moreComments=false,issueProgress=0f) };loadComments() }
+    fun issueReadingProgress(key:String,value:Float) {
+        val s=mutable.value;val issue=s.issue?:return;val project=s.project?:return
+        if(key=="${project.id.fullName}:${s.ref}:issue-${issue.number}.md")mutable.update{it.copy(issueProgress=value.coerceIn(0f,1f))}
+    }
     fun loadComments(more: Boolean=false) {
         val s=mutable.value;val id=s.project?.id ?: return;val issue=s.issue ?: return;val page=if(more)s.commentPage+1 else 1
         if(more&&(requestJob?.isActive==true||!s.moreComments))return

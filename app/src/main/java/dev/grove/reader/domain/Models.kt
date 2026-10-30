@@ -52,7 +52,7 @@ data class Issue(val number: Int, val title: String, val body: String, val autho
     val state: String, val comments: Int, val updated: String, val labels: List<String>, val url: String)
 data class IssueComment(val author: String, val body: String, val created: String)
 data class Heading(val id: String, val text: String, val level: Int)
-enum class Destination(val label: String) { LIBRARY("仓库"), SAVED("收藏"), DISCOVER("发现"), PROFILE("我的") }
+enum class Destination(val label: String) { LIBRARY("足迹"), SAVED("收藏"), DISCOVER("发现"), PROFILE("我的") }
 enum class RepoTab(val label: String) { READ("阅读"), FILES("文件"), ISSUES("Issues") }
 
 enum class Category(val label: String, val qualifier: String) {

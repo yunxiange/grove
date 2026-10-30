@@ -550,6 +550,11 @@
     "license": "MIT"
   },
   {
+    "name": "get-east-asian-width",
+    "version": "1.7.0",
+    "license": "MIT"
+  },
+  {
     "name": "hachure-fill",
     "version": "0.5.2",
     "license": "MIT"
@@ -631,6 +636,11 @@
   {
     "name": "markdown-it",
     "version": "14.1.0",
+    "license": "MIT"
+  },
+  {
+    "name": "markdown-it-cjk-friendly",
+    "version": "3.0.0",
     "license": "MIT"
   },
   {

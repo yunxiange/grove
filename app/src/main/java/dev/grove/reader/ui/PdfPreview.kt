@@ -10,6 +10,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -56,8 +57,8 @@ fun PdfPreview(file:File,modifier:Modifier=Modifier) {
         catch(e:Exception){error=if(e is SecurityException)"此 PDF 已加密，暂不支持输入密码。"else"PDF 无法读取，文件可能已损坏。"}
         finally {opened?.close()}
     }
-    var page by remember(file.absolutePath){mutableIntStateOf(0)}
-    var zoom by remember(file.absolutePath){mutableFloatStateOf(1f)}
+    var page by rememberSaveable(file.absolutePath){mutableIntStateOf(0)}
+    var zoom by rememberSaveable(file.absolutePath){mutableFloatStateOf(1f)}
     Column(modifier) {
         val current=session
         if(error!=null){Text(error!!,Modifier.padding(24.dp),fontSize=13.sp,color=Muted);return@Column}

@@ -2,13 +2,13 @@
 
 一个偏爱阅读的 GitHub 客户端。用暖白纸面、紧凑排版和清晰导航，浏览项目、阅读文档、收藏值得再看的内容。
 
-**目前仅支持 Android 8.0+ · Kotlin + Jetpack Compose · 已发布体验版 0.4.0，0.4.1 开发中**
+**目前仅支持 Android 8.0+ · Kotlin + Jetpack Compose · 正式版 0.4.1**
 
 <p align="center">
   <img src="docs/screenshots/overview.png" width="900" alt="Grove 产品界面：收藏搜索、最近访问、发现和个人页，四张实际页面叠放展示">
 </p>
 
-<sub>实际 Compose 页面，使用示例数据在 Robolectric 原生图形模式下渲染；尚未完成真机验收。</sub>
+<sub>实际 Compose 页面，使用示例数据在 Robolectric 原生图形模式下渲染。图片预览已在 Android 14 真机验证，完整验证范围见开发指南。</sub>
 
 ## 可以做什么
 
@@ -22,14 +22,14 @@
 | 接着阅读 | 最近访问可置顶、排序和移除；按账号记住列表 / 卡片模式、书签与阅读位置 |
 | 查看讨论 | 只读 Issues、Open / Closed 筛选、详情与评论滚动加载 |
 
-仓库页目前展示最近访问；登录后的全部账号项目位于「我的 → 我的项目」。访客可以阅读公开仓库，自己的 GitHub 账号授权后可访问获准的私有仓库。
+「足迹」页展示访问记录；登录后的全部账号项目位于「我的 → 我的项目」。底部导航在切换后保留各自打开的项目页面与阅读位置，页面内返回逐层回到入口；再次点击已选中的「足迹」可直接回到访问记录首页。访客可以阅读公开仓库，自己的 GitHub 账号授权后可访问获准的私有仓库。
 
-## 下载体验版
+## 下载
 
-- [下载 Android APK · v0.4.0](https://github.com/yunxiange/grove/releases/download/v0.4.0/Grove-0.4.0-debug.apk)
-- [版本说明与附件](https://github.com/yunxiange/grove/releases/tag/v0.4.0) · [SHA-256 校验文件](https://github.com/yunxiange/grove/releases/download/v0.4.0/Grove-0.4.0-SHA256.txt)
+- [下载 Android APK · v0.4.1](https://github.com/yunxiange/grove/releases/download/v0.4.1/Grove-0.4.1.apk)
+- [版本说明与附件](https://github.com/yunxiange/grove/releases/tag/v0.4.1) · [SHA-256 校验文件](https://github.com/yunxiange/grove/releases/download/v0.4.1/Grove-0.4.1-SHA256.txt)
 
-目前提供使用开发签名的预发布 APK，支持 Android 8.0+；尚未完成真机验收。下载后可在 Android 设备上直接安装。
+提供不可调试的 Release APK，支持 Android 8.0+。为兼容已有安装，沿用此前版本的开发签名证书，可直接覆盖升级并保留本机记录；这与应用商店专用发布签名不同。此版本在 GitHub 正式发布，尚未上架应用商店。
 
 ## 本地构建
 
@@ -48,7 +48,9 @@ APK 输出：`app/build/outputs/apk/debug/app-debug.apk`。阅读器资源已打
 
 ## 当前状态
 
-这是可安装的开发版本，尚未发布到应用商店。普通用户无需创建 GitHub App 或填写 Client ID；Star 写入和私有仓库读取需要 GitHub App 的相应权限与安装授权，当前仍需完成配置核验及真实设备验收。私有仓库仅在用户与应用均获准访问时可读，组织仓库可能需要管理员批准。
+普通用户无需创建 GitHub App 或填写 Client ID。GitHub App 已配置 Starring 读写权限，仓库内容、Issues 与元数据保持只读；已有用户若遇到 Star 权限提示，请重新登录并接受权限更新。私有仓库仅在用户与应用均获准访问时可读，组织仓库可能需要管理员批准。
+
+图片空白修复已在 OnePlus 8T（Android 14、WebView 156）真机确认；PDF、Excel 和登录 / Star / 私有仓库的完整端到端流程仍需更多设备验证。预览诊断默认关闭，需要时在「我的 → 更多 → 开发者选项」开启。
 
 项目内容和 Issues 为只读，Star 支持写入。本机书签和阅读记录暂不支持跨设备同步。GitHub 登录凭据由 Android Keystore 加密保存；工程中的 Client ID 和应用 slug 是公开标识，APK 不包含应用私钥或 Client Secret。
 

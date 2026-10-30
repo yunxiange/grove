@@ -14,7 +14,8 @@ await cp('node_modules/katex/dist/fonts', out + '/fonts', { recursive: true });
 await writeFile(out + '/THIRD_PARTY.txt', [
   'Grove reader bundles the following open-source libraries:',
   'markdown-it (MIT), DOMPurify (Apache-2.0 OR MPL-2.0), highlight.js (BSD-3-Clause),',
-  'Mermaid (MIT), KaTeX (MIT), markdown-it-texmath (MIT), markdown-it-task-lists (ISC).',
+  'Mermaid (MIT), KaTeX (MIT), markdown-it-texmath (MIT), markdown-it-task-lists (ISC),',
+  'markdown-it-cjk-friendly (MIT), get-east-asian-width (MIT).',
   'Exact versions are recorded in reader/package-lock.json. Bundled JS license notices are retained.'
 ].join('\n'));
 await mkdir(out+'/licenses',{recursive:true});

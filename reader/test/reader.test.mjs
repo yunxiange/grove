@@ -31,3 +31,28 @@ test('GFM tables, tasks, math, and mermaid remain readable after sanitizing',()=
  assert.ok(root.querySelector('.katex [style]'),'KaTeX positioning styles must survive to keep exponents aligned');
  assert.equal(root.querySelector('.mermaid').textContent.trim(),'flowchart LR\n A-->B');
 });
+test('double asterisks render Chinese emphasis next to quotes colons and brackets',()=>{
+ for(const [source,text] of [
+  ['**xxxx**','xxxx'],['这是**加粗**文字','加粗'],['这是**“重点”**内容','“重点”'],
+  ['这是**重点：**内容','重点：'],['**重点：**后续','重点：'],['这是**【提示】**内容','【提示】'],
+  ['启用**Starring → Read and write**权限','Starring → Read and write']
+ ]){
+  const root=render(source);
+  assert.equal(root.querySelector('strong')?.textContent,text,source);
+  assert.equal(root.textContent.includes('**'),false,source);
+ }
+});
+test('literal double asterisks in code escapes and unclosed markup stay literal',()=>{
+ const root=render('`**inline**`\n\n```text\n**block**\n```\n\n\\*\\*原样\\*\\*\n\n**未闭合');
+ assert.equal(root.querySelector('p code').textContent,'**inline**');
+ assert.equal(root.querySelector('pre code').textContent.trim(),'**block**');
+ assert.match(root.textContent,/\*\*原样\*\*/);assert.match(root.textContent,/\*\*未闭合/);
+ assert.equal(root.querySelector('strong'),null);
+});
+test('Chinese bold emphasis preserves nested links inline code and emphasis',()=>{
+ const root=render('查看**[文档](./guide.md)：**了解更多。\n\n使用**`npm test`：**执行检查。\n\n这是***“重点”***内容。');
+ assert.equal(root.querySelector('strong a')?.getAttribute('href'),'./guide.md');
+ assert.equal(root.querySelector('strong code')?.textContent,'npm test');
+ assert.ok(root.querySelector('em strong, strong em'));
+ assert.equal(root.textContent.includes('**'),false);
+});

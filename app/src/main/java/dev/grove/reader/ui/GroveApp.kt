@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.*
 import androidx.compose.material.icons.outlined.*
@@ -34,6 +35,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults.Indicator
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -45,6 +47,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,6 +74,9 @@ private val PaperColors=lightColorScheme(primary=Ink,onPrimary=Paper,secondary=M
 @Composable
 fun GroveApp(model:GroveViewModel) {
     val s by model.state.collectAsStateWithLifecycle()
+    val screens=key(s.username){rememberSaveableStateHolder()}
+    val screenKey="${s.username}:${s.destination}:"+if(s.project==null)"home"else
+        "${s.project!!.id.fullName}:${s.ref}:${s.tab}:"+when(s.tab){RepoTab.READ->s.document?.path?:"loading";RepoTab.ISSUES->s.issue?.number?:"list";RepoTab.FILES->"files"}
     // Keep list state above the navigation branches: repository details remove DiscoveryPage.
     val discoveryListState=rememberSaveable(s.category,s.language,s.newProjects,s.discoveryQuery,s.username,s.discoveryRevision,saver=LazyListState.Saver){LazyListState()}
     val discoveryCategoryScroll=rememberSaveable(s.username,saver=ScrollState.Saver){ScrollState(0)}
@@ -116,6 +122,7 @@ fun GroveApp(model:GroveViewModel) {
         BackHandler(enabled=s.project!=null){model.back()}
         Scaffold(containerColor=Paper,bottomBar={if(!s.immersive)BottomNavigation(s.destination,model::navigate)}) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
+                screens.SaveableStateProvider(screenKey) {
                 if(s.project!=null) {
                     if(!s.immersive) {
                         CompactHeader(s.project!!.id.name,onBack=model::back,subtitle=s.project!!.id.owner) {
@@ -145,6 +152,7 @@ fun GroveApp(model:GroveViewModel) {
                         Destination.DISCOVER -> DiscoveryPage(s,model,discoveryListState,discoveryCategoryScroll)
                         Destination.PROFILE -> ProfilePage(s,model,{settings=true},{about=true},{importing=false;imports=true},{addedRepos=true})
                     }
+                }
                 }
             }
         }
@@ -312,7 +320,7 @@ fun GroveApp(model:GroveViewModel) {
 @Composable private fun ColumnScope.LibraryPage(s:GroveState,model:GroveViewModel,onAdd:()->Unit,onProjects:()->Unit) {
     var search by remember {mutableStateOf(false)};var query by rememberSaveable {mutableStateOf("")};val grid=s.libraryGrid
     var sorting by remember {mutableStateOf(false)}
-    CompactHeader("最近访问") {
+    CompactHeader("访问记录") {
         IconButton(onClick={search=!search}){Icon(Icons.Outlined.Search,"搜索最近项目",Modifier.size(20.dp))}
         IconButton(onClick=onAdd){Icon(Icons.Outlined.Add,"添加仓库",Modifier.size(20.dp))}
     }
@@ -491,7 +499,7 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
             searching&&s.starSearchBusy -> "正在搜索全部 Star · 已检查 ${s.starSearchScanned} 个"
             searching&&s.starSearchComplete -> "找到 ${stars.size} 个仓库 · 已搜索全部 ${s.starSearchScanned} 个 Star"
             searching -> "搜索尚未完成 · 已检查 ${s.starSearchScanned} 个 Star"
-            else -> "${stars.size} 个仓库"+if(s.moreStars)" · 上拉继续加载"else""
+            else -> "${stars.size} 个仓库"
         }
         Text(summary,Modifier.padding(horizontal=22.dp,vertical=5.dp),fontSize=9.sp,color=Muted)
     }
@@ -508,7 +516,7 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
             LazyColumn(Modifier.fillMaxSize(),state=listState,contentPadding=PaddingValues(horizontal=22.dp)) {
                 if(stars.isEmpty()&&!s.loading&&!s.starSearchBusy&&s.error==null&&(!searching||s.starSearchComplete))item{EmptyNotice(if(!searching)"还没有 Star 的仓库。"else"没有匹配的仓库。",if(!searching)"去发现页寻找喜欢的项目。"else"试试其他仓库名、作者或简介关键词。",Icons.Outlined.StarBorder)}
                 items(stars,key={it.id.fullName}){p->ProjectRow(p,onClick={model.openRepository(p.id)},starAction={RepositoryStar(p,s,model)})}
-                if(!searching&&s.moreStars)item {PageLoading(s.loading)}
+                if(!searching&&s.moreStars&&s.loading)item {PageLoading(true)}
             }
         }
     }else LazyColumn(Modifier.fillMaxSize(),state=listState,contentPadding=PaddingValues(horizontal=22.dp)) {
@@ -537,6 +545,7 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
 @Composable private fun ColumnScope.ProfilePage(s:GroveState,model:GroveViewModel,settings:()->Unit,about:()->Unit,projects:()->Unit,addedRepos:()->Unit) {
     val context=LocalContext.current
     var more by remember {mutableStateOf(false)}
+    var developerOptions by remember {mutableStateOf(false)}
     CompactHeader("我的") {
         IconButton(onClick={more=true}){Icon(Icons.Outlined.MoreHoriz,"更多功能",Modifier.size(22.dp))}
     }
@@ -550,8 +559,27 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
                 more=false;contextOpen(context,"https://github.com/apps/${BuildConfig.GITHUB_APP_SLUG}/installations/new")
             }
             MoreAction(Icons.Outlined.Info,"关于 Grove"){more=false;about()}
+            MoreAction(Icons.Outlined.Code,"开发者选项"){more=false;developerOptions=true}
             if(s.username.isNotBlank())MoreAction(Icons.AutoMirrored.Outlined.Logout,"退出登录"){more=false;model.logout()}
             Spacer(Modifier.height(18.dp))
+        }
+    }
+    if(developerOptions)ModalBottomSheet(onDismissRequest={developerOptions=false},containerColor=Paper,tonalElevation=0.dp) {
+        CompactHeader("开发者选项") {IconButton(onClick={developerOptions=false}){Icon(Icons.Outlined.Close,"关闭开发者选项",Modifier.size(19.dp))}}
+        HorizontalDivider(color=Rule)
+        Column(Modifier.fillMaxWidth().padding(horizontal=24.dp)) {
+            Text("仅在排查预览显示问题时开启。",Modifier.padding(top=18.dp),fontSize=11.sp,color=Muted)
+            Row(Modifier.fillMaxWidth().toggleable(value=s.previewDiagnosticsEnabled,role=Role.Switch,onValueChange=model::setPreviewDiagnosticsEnabled).padding(vertical=20.dp),verticalAlignment=Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).padding(end=16.dp),verticalArrangement=Arrangement.spacedBy(7.dp)) {
+                    Text("预览诊断",fontSize=13.sp,color=Ink)
+                    Text("在图片和表格预览页显示诊断入口",fontSize=10.sp,color=Muted)
+                }
+                Switch(checked=s.previewDiagnosticsEnabled,onCheckedChange=null,colors=SwitchDefaults.colors(
+                    checkedThumbColor=Paper,checkedTrackColor=Ink,checkedBorderColor=Ink,
+                    uncheckedThumbColor=Muted,uncheckedTrackColor=Paper,uncheckedBorderColor=Rule))
+            }
+            HorizontalDivider(color=Rule)
+            Spacer(Modifier.height(24.dp))
         }
     }
     HorizontalDivider(color=Rule)
@@ -610,6 +638,18 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
     val doc=s.document
     if(doc==null) {if(!s.loading)EmptyNotice("打开一页，开始阅读。","可以先浏览文件，或重试加载 README。");return}
     val context=LocalContext.current
+    val previewDiagnostics=remember(doc.key){PreviewDiagnostics(doc)}
+    var showPreviewDiagnostics by remember(doc.key){mutableStateOf(false)}
+    if(showPreviewDiagnostics&&s.previewDiagnosticsEnabled)AlertDialog(onDismissRequest={showPreviewDiagnostics=false},containerColor=Paper,
+        title={Text("预览诊断",fontFamily=FontFamily.Serif)},
+        text={SelectionContainer{Text(previewDiagnostics.report(),Modifier.heightIn(max=360.dp).verticalScroll(rememberScrollState()),fontSize=11.sp,lineHeight=20.sp,fontFamily=FontFamily.Monospace)}},
+        confirmButton={TextButton(onClick={
+            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("预览诊断",previewDiagnostics.report()))
+            Toast.makeText(context,"诊断信息已复制",Toast.LENGTH_SHORT).show()
+        }){Text("复制诊断")}},dismissButton={Row {
+            TextButton(onClick={previewDiagnostics.softwareRendering=!previewDiagnostics.softwareRendering;showPreviewDiagnostics=false}){Text(if(previewDiagnostics.softwareRendering)"默认显示"else"兼容显示")}
+            TextButton(onClick={showPreviewDiagnostics=false}){Text("关闭")}
+        }})
     val sourceVertical=rememberSaveable(doc.key,saver=ScrollState.Saver){ScrollState(0)}
     val sourceHorizontal=rememberSaveable(doc.key,saver=ScrollState.Saver){ScrollState(0)}
     Row(Modifier.fillMaxWidth().padding(start=if(s.immersive)4.dp else 20.dp,end=7.dp),verticalAlignment=Alignment.CenterVertically) {
@@ -633,7 +673,7 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
     }
     else if(s.raw||(!doc.markdown&&doc.attachment==null))SelectionContainer(Modifier.weight(1f).fillMaxWidth().verticalScroll(sourceVertical).horizontalScroll(sourceHorizontal).padding(20.dp)) {
         Text(doc.content,fontSize=12.sp,lineHeight=21.sp,fontFamily=FontFamily.Monospace)
-    } else DocumentReader(doc,s.fontSize,s.warm,s.progress,onLink,model::progress,model::setHeadings,jump,Modifier.weight(1f).fillMaxWidth(),onImage=model::previewImage,imageResource=model::imageResource,onImageLongPress=model::showImageActions)
+    } else DocumentReader(doc,s.fontSize,s.warm,s.progress,onLink,model::progress,model::setHeadings,jump,Modifier.weight(1f).fillMaxWidth(),onImage=model::previewImage,imageResource=model::imageResource,onImageLongPress=model::showImageActions,diagnostics=previewDiagnostics.takeIf{s.previewDiagnosticsEnabled})
     HorizontalDivider(color=Rule)
     Row(Modifier.fillMaxWidth().padding(horizontal=12.dp),verticalAlignment=Alignment.CenterVertically) {
         TextButton(onClick=files){Icon(Icons.Outlined.AccountTree,null,Modifier.size(14.dp));Text(" 文件",fontSize=10.sp)}
@@ -646,7 +686,10 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
             },enabled=!doc.sourceTooLarge){Icon(Icons.Outlined.ContentCopy,"复制 SVG 源码",Modifier.size(18.dp))}
             Text("SVG 源码",fontSize=9.sp,color=Muted)
         }else if(doc.attachment==null)IconButton(onClick=settings){Icon(Icons.Outlined.TextFields,"阅读设置",Modifier.size(18.dp))}
-        else Text(if(doc.attachment.kind==PreviewKind.SPREADSHEET)"只读表格"else if(doc.attachment.kind==PreviewKind.IMAGE)"双指缩放"else"PDF",fontSize=9.sp,color=Muted)
+        else {
+            Text(if(doc.attachment.kind==PreviewKind.SPREADSHEET)"只读表格"else if(doc.attachment.kind==PreviewKind.IMAGE)"双指缩放"else"PDF",fontSize=9.sp,color=Muted)
+            if(s.previewDiagnosticsEnabled&&doc.attachment.kind!=PreviewKind.PDF)IconButton(onClick={showPreviewDiagnostics=true},modifier=Modifier.size(36.dp)){Icon(Icons.Outlined.Info,"预览诊断",Modifier.size(18.dp),tint=Muted)}
+        }
     }
 }
 
@@ -684,7 +727,7 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
             s.comments.forEach {append("### ${it.author}\n\n${it.created}\n\n${it.body}\n\n---\n\n")}
         }}
         val project=s.project ?: return
-        DocumentReader(Document(project.id,s.ref,"issue-${issue.number}.md",body),s.fontSize,s.warm,0f,onLink,{_,_->},{_,_->},null,Modifier.weight(1f).fillMaxWidth(),onImage=model::previewImage,imageResource=model::imageResource,onImageLongPress=model::showImageActions,
+        DocumentReader(Document(project.id,s.ref,"issue-${issue.number}.md",body),s.fontSize,s.warm,s.issueProgress,onLink,model::issueReadingProgress,{_,_->},null,Modifier.weight(1f).fillMaxWidth(),onImage=model::previewImage,imageResource=model::imageResource,onImageLongPress=model::showImageActions,
             endPage=if(s.moreComments&&!s.loading&&s.error==null)s.commentPage else null,
             onEnd={model.loadComments(true)})
         if(s.moreComments)PageLoading(s.loading)
