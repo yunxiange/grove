@@ -2,7 +2,7 @@
 
 一个偏爱阅读的 GitHub 客户端。用暖白纸面、紧凑排版和清晰导航，浏览项目、阅读文档、收藏值得再看的内容。
 
-**目前仅支持 Android 8.0+ · Kotlin + Jetpack Compose · 开发版 0.4.1**
+**目前仅支持 Android 8.0+ · Kotlin + Jetpack Compose · 已发布体验版 0.4.0，0.4.1 开发中**
 
 <p align="center">
   <img src="docs/screenshots/overview.png" width="900" alt="Grove 产品界面：收藏搜索、最近访问、发现和个人页，四张实际页面叠放展示">
@@ -26,8 +26,8 @@
 
 ## 下载体验版
 
-- [下载 Android APK · v0.4.1](https://github.com/yunxiange/grove/releases/download/v0.4.1/Grove-0.4.1-debug.apk)
-- [版本说明与附件](https://github.com/yunxiange/grove/releases/tag/v0.4.1) · [SHA-256 校验文件](https://github.com/yunxiange/grove/releases/download/v0.4.1/Grove-0.4.1-SHA256.txt)
+- [下载 Android APK · v0.4.0](https://github.com/yunxiange/grove/releases/download/v0.4.0/Grove-0.4.0-debug.apk)
+- [版本说明与附件](https://github.com/yunxiange/grove/releases/tag/v0.4.0) · [SHA-256 校验文件](https://github.com/yunxiange/grove/releases/download/v0.4.0/Grove-0.4.0-SHA256.txt)
 
 目前提供使用开发签名的预发布 APK，支持 Android 8.0+；尚未完成真机验收。下载后可在 Android 设备上直接安装。
 
