@@ -11,14 +11,16 @@ class ReadingStore(context: Context, accountId: String = "anonymous") {
     fun saveLibrary(repos: List<RepoId>) { prefs.edit().putString("library", JSONArray(repos.map { it.fullName }).toString()).apply() }
     fun recentVisits():List<RepositoryVisit> {
         if(!prefs.contains("recentRepositories"))return resume()?.let{listOf(RepositoryVisit(it.repo,0))}.orEmpty()
-        return array("recentRepositories").mapNotNull {value->
+        return boundedVisits(array("recentRepositories").mapNotNull {value->
             val json=value as? JSONObject?:return@mapNotNull null
             val repo=RepoId.parse(json.optString("repo"))?:return@mapNotNull null
-            RepositoryVisit(repo,json.optLong("visitedAt").coerceAtLeast(0))
-        }.sortedByDescending{it.visitedAt}.distinctBy{it.repo.fullName.lowercase()}.take(30)
+            RepositoryVisit(repo,json.optLong("visitedAt").coerceAtLeast(0),json.optBoolean("pinned"))
+        })
     }
     fun recordVisit(repo:RepoId,visitedAt:Long=System.currentTimeMillis()):List<RepositoryVisit> {
-        val visits=(listOf(RepositoryVisit(repo,visitedAt.coerceAtLeast(0)))+recentVisits().filterNot{it.repo.fullName.equals(repo.fullName,true)}).take(30)
+        val previous=recentVisits()
+        val pinned=previous.firstOrNull{it.repo.fullName.equals(repo.fullName,true)}?.pinned?:false
+        val visits=boundedVisits(listOf(RepositoryVisit(repo,visitedAt.coerceAtLeast(0),pinned))+previous.filterNot{it.repo.fullName.equals(repo.fullName,true)})
         saveVisits(visits);return visits
     }
     fun removeVisit(repo:RepoId):List<RepositoryVisit> {
@@ -26,8 +28,19 @@ class ReadingStore(context: Context, accountId: String = "anonymous") {
         saveVisits(visits);return visits
     }
     private fun saveVisits(visits:List<RepositoryVisit>) {
-        prefs.edit().putString("recentRepositories",JSONArray(visits.map{JSONObject().put("repo",it.repo.fullName).put("visitedAt",it.visitedAt)}).toString()).apply()
+        prefs.edit().putString("recentRepositories",JSONArray(visits.map{JSONObject().put("repo",it.repo.fullName).put("visitedAt",it.visitedAt).put("pinned",it.pinned)}).toString()).apply()
     }
+    private fun boundedVisits(visits:List<RepositoryVisit>):List<RepositoryVisit> {
+        val unique=visits.sortedByDescending{it.visitedAt}.distinctBy{it.repo.fullName.lowercase()}
+        return unique.filter{it.pinned}+unique.filterNot{it.pinned}.take(30)
+    }
+    fun setVisitPinned(repo:RepoId,pinned:Boolean):List<RepositoryVisit> {
+        val visits=boundedVisits(recentVisits().map{if(it.repo.fullName.equals(repo.fullName,true))it.copy(pinned=pinned)else it})
+        saveVisits(visits);return visits
+    }
+    var libraryGrid:Boolean
+        get()=prefs.getBoolean("libraryGrid",false)
+        set(value){prefs.edit().putBoolean("libraryGrid",value).apply()}
     var recentSort:RecentSort
         get()=runCatching{RecentSort.valueOf(prefs.getString("recentSort",RecentSort.VISITED.name)!!)}.getOrDefault(RecentSort.VISITED)
         set(value){prefs.edit().putString("recentSort",value.name).apply()}

@@ -7,5 +7,5 @@ fun sortedRecentVisits(visits:List<RepositoryVisit>,projects:Map<String,Project>
         RecentSort.NAME -> visits.sortedBy{it.repo.fullName.lowercase()}
         RecentSort.STARS -> visits.sortedWith(compareByDescending<RepositoryVisit>{known.containsKey(it.repo.fullName.lowercase())}
             .thenByDescending{known[it.repo.fullName.lowercase()]?.stars?:0}.thenBy{it.repo.fullName.lowercase()})
-    }
+    }.sortedByDescending{it.pinned}
 }

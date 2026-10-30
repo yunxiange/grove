@@ -134,7 +134,7 @@ class DiscoveryNavigationTest {
     }
     @Test fun emptyResultsCanStillBePulledToRefresh() {
         emptySearch=true
-        compose.onNodeWithContentDescription("刷新发现").performClick();awaitLoad()
+        compose.runOnIdle{model.refreshDiscoveries()};awaitLoad()
         assertEquals(0,model.state.value.discoveries.size)
         emptySearch=false
         pullToRefresh()

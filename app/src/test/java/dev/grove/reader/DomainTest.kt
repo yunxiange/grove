@@ -34,4 +34,10 @@ class DomainTest {
         assertEquals("release%2Fv2",encode("release/v2"))
         assertEquals("docs/a%20b.md",encodePath("docs/a b.md"))
     }
+    @Test fun discoveryKeywordsReachSearchWithoutTheFeaturedStarThreshold() {
+        val query=discoveryQuery(Category.ANDROID,"Kotlin",null,"small reader")
+        assertTrue(query.contains("small reader"));assertTrue(query.contains("topic:android"))
+        assertTrue(query.contains("language:Kotlin"));assertFalse(query.contains("stars:>10"))
+        assertTrue(discoveryQuery(Category.ALL,"",null).contains("stars:>10"))
+    }
 }

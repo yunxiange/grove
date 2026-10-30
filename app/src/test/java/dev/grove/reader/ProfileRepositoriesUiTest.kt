@@ -23,8 +23,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowDialog
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.URLDecoder
+import java.util.concurrent.CopyOnWriteArrayList
 import java.time.Duration
 import java.util.Base64
 
@@ -35,6 +38,7 @@ class ProfileRepositoriesUiTest {
     @get:Rule val compose=createAndroidComposeRule<ComponentActivity>()
     private lateinit var app:Application
     private lateinit var model:GroveViewModel
+    private val discoveryQueries=CopyOnWriteArrayList<String>()
     private fun project(name:String,stars:Int=0)=JSONObject().put("owner",JSONObject().put("login","owner"))
         .put("name",name).put("description","A quiet place for project notes.").put("language","Kotlin")
         .put("stargazers_count",stars).put("private",name=="gamma").put("default_branch","main")
@@ -46,6 +50,7 @@ class ProfileRepositoriesUiTest {
         val api=GitHubClient(app.cacheDir.resolve("profile-ui-test"),connectionFactory={url->
             val params=url.query.orEmpty().split('&').associate{it.substringBefore('=') to it.substringAfter('=')}
             val name=url.path.substringAfterLast('/')
+            if(url.path=="/search/repositories")discoveryQueries.add(URLDecoder.decode(params["q"].orEmpty(),"UTF-8"))
             val body=when {
                 url.path=="/search/repositories" -> JSONObject().put("items",JSONArray(listOf(project("paper-notes",4200),project("android-reader",3100),project("open-library",1800)))).toString()
                 url.path=="/user/repos" -> JSONArray(listOf(project("alpha",10),project("beta",100),project("gamma",50))).toString()
@@ -79,7 +84,9 @@ class ProfileRepositoriesUiTest {
         compose.runOnIdle {
             val view=compose.activity.window.decorView
             val image=Bitmap.createBitmap(view.width,view.height,Bitmap.Config.ARGB_8888)
-            view.draw(Canvas(image))
+            val canvas=Canvas(image)
+            view.draw(canvas)
+            ShadowDialog.getLatestDialog()?.takeIf{it.isShowing}?.window?.decorView?.draw(canvas)
             val file=File("build/reports/ui/$name.png").apply{parentFile?.mkdirs()}
             file.outputStream().use{assertTrue(image.compress(Bitmap.CompressFormat.PNG,100,it))}
         }
@@ -94,6 +101,7 @@ class ProfileRepositoriesUiTest {
         compose.onNodeWithText("仓库授权").assertDoesNotExist()
         snapshot("profile")
         compose.onNodeWithContentDescription("更多功能").performClick()
+        snapshot("profile-more")
         compose.onNodeWithText("阅读偏好").assertIsDisplayed()
         compose.onNodeWithText("仓库授权").assertIsDisplayed()
         compose.onNodeWithText("关于 Grove").performClick()
@@ -101,6 +109,7 @@ class ProfileRepositoriesUiTest {
         compose.onNodeWithText("文档书签").performClick()
         compose.onNodeWithText("文档书签 1").assertIsSelected()
         compose.onNodeWithText("README.md").assertIsDisplayed()
+        compose.onNodeWithContentDescription("搜索收藏").performClick()
         compose.onNode(hasSetTextAction()).performTextInput("unmatched")
         snapshot("bookmarks-empty")
         compose.onNodeWithText("没有匹配的书签。").assertIsDisplayed()
@@ -138,6 +147,8 @@ class ProfileRepositoriesUiTest {
     @Test fun favoritesSearchTraversesEveryStarPageAndShowsLastPageMatch() {
         compose.runOnIdle{model.openSaved(false)};awaitLoad()
         assertEquals(30,model.state.value.stars.size)
+        compose.onNode(hasSetTextAction()).assertDoesNotExist()
+        compose.onNodeWithContentDescription("搜索收藏").performClick()
         compose.onNode(hasSetTextAction()).performTextInput("needle")
         compose.waitUntil(15_000){shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(350));!model.state.value.starSearchBusy}
         compose.onNodeWithText("needle-final").assertIsDisplayed()
@@ -153,5 +164,62 @@ class ProfileRepositoriesUiTest {
         compose.onNodeWithText("paper-notes").assertIsDisplayed()
         compose.onNodeWithText("android-reader").assertIsDisplayed()
         snapshot("discovery")
+    }
+    @Test fun switchingToEmptyBookmarksNeverKeepsStarRows() {
+        compose.runOnIdle{model.openSaved(false)};awaitLoad()
+        compose.onNodeWithText("star-0").assertIsDisplayed()
+        compose.onNodeWithText("文档书签 0").performClick().assertIsSelected()
+        assertTrue(model.state.value.savedBookmarks)
+        compose.onNodeWithText("star-0").assertDoesNotExist()
+        compose.onNodeWithText("留一枚书签。").assertIsDisplayed()
+        snapshot("saved-empty-bookmarks")
+        compose.onNodeWithText("仓库 Star").performClick();awaitLoad()
+        compose.onNodeWithText("star-0").assertIsDisplayed()
+        compose.onNodeWithText("留一枚书签。").assertDoesNotExist()
+    }
+    @Test fun libraryViewChoiceSurvivesBottomNavigation() {
+        open("alpha");compose.runOnIdle{model.navigate(Destination.LIBRARY)}
+        compose.onNodeWithContentDescription("封面视图").performClick()
+        compose.onNodeWithContentDescription("列表视图").assertIsDisplayed()
+        compose.onNodeWithText("我的").performClick()
+        compose.onNodeWithText("仓库").performClick()
+        compose.onNodeWithContentDescription("列表视图").assertIsDisplayed()
+    }
+    @Test fun libraryViewChoiceSurvivesViewModelRestartAndIsolatedFromGuest() {
+        compose.runOnIdle{model.setLibraryGrid(true)}
+        assertTrue(GroveViewModel(app).state.value.libraryGrid)
+        compose.runOnIdle{model.logout()}
+        assertFalse(model.state.value.libraryGrid)
+        assertTrue(ReadingStore(app,"100").libraryGrid)
+    }
+    @Test fun recentProjectsCanPinAndUnpinInBothViews() {
+        open("beta");open("alpha");compose.runOnIdle{model.navigate(Destination.LIBRARY)}
+        compose.onNodeWithContentDescription("项目操作 owner/beta").performClick()
+        compose.onNodeWithText("置顶项目").performClick()
+        assertTrue(ReadingStore(app,"100").recentVisits().first{it.repo.name=="beta"}.pinned)
+        assertTrue(compose.onNodeWithText("beta").fetchSemanticsNode().boundsInRoot.top<compose.onNodeWithText("alpha").fetchSemanticsNode().boundsInRoot.top)
+        snapshot("recent-pinned")
+        compose.onNodeWithContentDescription("封面视图").performClick()
+        compose.onNodeWithContentDescription("项目操作 owner/beta").performClick()
+        compose.onNodeWithText("取消置顶").performClick()
+        assertFalse(ReadingStore(app,"100").recentVisits().first{it.repo.name=="beta"}.pinned)
+        snapshot("recent-cards")
+    }
+    @Test fun discoverySearchUsesGitHubAndKeepsFiltersThenClearsOnClose() {
+        compose.runOnIdle{model.navigate(Destination.DISCOVER)};awaitLoad()
+        compose.onNode(hasSetTextAction()).assertDoesNotExist()
+        compose.onNodeWithContentDescription("搜索发现").performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("small reader")
+        compose.waitUntil(15_000){shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(400));!model.state.value.loading}
+        assertTrue(discoveryQueries.last().contains("small reader"))
+        assertFalse(discoveryQueries.last().contains("stars:>10"))
+        compose.onNodeWithText("AI").performClick();awaitLoad()
+        assertTrue(discoveryQueries.last().contains("topic:artificial-intelligence"))
+        assertTrue(discoveryQueries.last().contains("small reader"))
+        snapshot("discovery-search")
+        compose.onNodeWithContentDescription("关闭发现搜索").performClick();awaitLoad()
+        assertEquals("",model.state.value.discoveryQuery)
+        compose.onNode(hasSetTextAction()).assertDoesNotExist()
+        assertTrue(discoveryQueries.last().contains("stars:>10"))
     }
 }

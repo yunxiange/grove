@@ -2,7 +2,7 @@
 
 一个偏爱阅读的 GitHub 客户端。用暖白纸面、紧凑排版和清晰导航，浏览项目、阅读文档、收藏值得再看的内容。
 
-**目前仅支持 Android 8.0+ · Kotlin + Jetpack Compose · 开发版 0.3.2**
+**目前仅支持 Android 8.0+ · Kotlin + Jetpack Compose · 开发版 0.4.0**
 
 <p align="center">
   <img src="docs/screenshots/overview.png" width="900" alt="Grove 产品界面：收藏搜索、最近访问、发现和个人页，四张实际页面叠放展示">
@@ -17,17 +17,17 @@
 | 阅读项目 | README、目录、文本文件、分支切换；阅读目录、字号、纸色与专注阅读 |
 | 阅读 Markdown | 表格、任务列表、代码高亮、Mermaid、KaTeX 公式与相对图片链接 |
 | 查看附件 | 图片缩放与长按保存、SVG 预览 / 源码切换、PDF 分页、Excel / CSV 多工作表 |
-| 管理收藏 | GitHub Star 添加与移除；搜索全部 Star、本机文档书签；下拉刷新、上拉加载 |
-| 浏览发现 | 按领域和语言筛选高星项目、近 30 天新项目，返回时保留滚动位置 |
-| 接着阅读 | 最近访问可排序和移除；按账号保存书签与阅读位置；个人页直接继续阅读 |
+| 管理收藏 | GitHub Star 添加与移除；点击右上角搜索全部 Star、本机文档书签；下拉刷新、上拉加载 |
+| 浏览发现 | 按领域和语言筛选高星项目、近 30 天新项目；支持 GitHub 项目搜索，返回时保留滚动位置 |
+| 接着阅读 | 最近访问可置顶、排序和移除；按账号记住列表 / 卡片模式、书签与阅读位置 |
 | 查看讨论 | 只读 Issues、Open / Closed 筛选、详情与评论滚动加载 |
 
 仓库页目前展示最近访问；登录后的全部账号项目位于「我的 → 我的项目」。访客可以阅读公开仓库，自己的 GitHub 账号授权后可访问获准的私有仓库。
 
 ## 下载体验版
 
-- [下载 Android APK · v0.3.2](https://github.com/yunxiange/grove/releases/download/v0.3.2/Grove-0.3.2-debug.apk)
-- [版本说明与附件](https://github.com/yunxiange/grove/releases/tag/v0.3.2) · [SHA-256 校验文件](https://github.com/yunxiange/grove/releases/download/v0.3.2/Grove-0.3.2-SHA256.txt)
+- [下载 Android APK · v0.4.0](https://github.com/yunxiange/grove/releases/download/v0.4.0/Grove-0.4.0-debug.apk)
+- [版本说明与附件](https://github.com/yunxiange/grove/releases/tag/v0.4.0) · [SHA-256 校验文件](https://github.com/yunxiange/grove/releases/download/v0.4.0/Grove-0.4.0-SHA256.txt)
 
 目前提供使用开发签名的预发布 APK，支持 Android 8.0+；尚未完成真机验收。下载后可在 Android 设备上直接安装。
 

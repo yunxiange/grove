@@ -23,6 +23,8 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.*
 import androidx.compose.material.icons.outlined.*
@@ -37,6 +39,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontFamily
@@ -66,7 +72,7 @@ private val PaperColors=lightColorScheme(primary=Ink,onPrimary=Paper,secondary=M
 fun GroveApp(model:GroveViewModel) {
     val s by model.state.collectAsStateWithLifecycle()
     // Keep list state above the navigation branches: repository details remove DiscoveryPage.
-    val discoveryListState=rememberSaveable(s.category,s.language,s.newProjects,s.username,s.discoveryRevision,saver=LazyListState.Saver){LazyListState()}
+    val discoveryListState=rememberSaveable(s.category,s.language,s.newProjects,s.discoveryQuery,s.username,s.discoveryRevision,saver=LazyListState.Saver){LazyListState()}
     val discoveryCategoryScroll=rememberSaveable(s.username,saver=ScrollState.Saver){ScrollState(0)}
     val context=LocalContext.current
     val imageSaveLauncher=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){result->
@@ -271,7 +277,7 @@ fun GroveApp(model:GroveViewModel) {
 }
 
 @Composable private fun ColumnScope.LibraryPage(s:GroveState,model:GroveViewModel,onAdd:()->Unit,onProjects:()->Unit) {
-    var search by remember {mutableStateOf(false)};var query by rememberSaveable {mutableStateOf("")};var grid by rememberSaveable {mutableStateOf(false)}
+    var search by remember {mutableStateOf(false)};var query by rememberSaveable {mutableStateOf("")};val grid=s.libraryGrid
     var sorting by remember {mutableStateOf(false)}
     CompactHeader("最近访问") {
         IconButton(onClick={search=!search}){Icon(Icons.Outlined.Search,"搜索最近项目",Modifier.size(20.dp))}
@@ -289,7 +295,7 @@ fun GroveApp(model:GroveViewModel) {
                     onClick={sorting=false;model.setRecentSort(sort)})}
             }
         }
-        IconButton(onClick={grid=!grid}){Icon(if(grid)Icons.AutoMirrored.Outlined.ViewList else Icons.Outlined.GridView,if(grid)"列表视图" else "封面视图",Modifier.size(17.dp))}
+        IconButton(onClick={model.setLibraryGrid(!grid)}){Icon(if(grid)Icons.AutoMirrored.Outlined.ViewList else Icons.Outlined.GridView,if(grid)"列表视图" else "封面视图",Modifier.size(17.dp))}
     }
     val visits=remember(s.recentVisits,s.projects,s.recentSort,query) {
         sortedRecentVisits(s.recentVisits,s.projects,s.recentSort).filter{
@@ -311,10 +317,10 @@ fun GroveApp(model:GroveViewModel) {
                 BookCover(id,Modifier.fillMaxWidth().height(185.dp))
                 Row(verticalAlignment=Alignment.CenterVertically) {
                     Text(id.name,Modifier.weight(1f).padding(top=9.dp),fontSize=12.sp,fontWeight=FontWeight.Medium,maxLines=1,overflow=TextOverflow.Ellipsis)
-                    RecentProjectMenu(id){model.removeRecentRepository(id)}
+                    RecentProjectMenu(id,visit.pinned,{model.toggleRecentPin(id)}){model.removeRecentRepository(id)}
                 }
                 Text(id.owner,fontSize=9.sp,color=Muted,maxLines=1)
-                Text(visitLabel(visit.visitedAt),Modifier.padding(top=4.dp),fontSize=9.sp,color=Muted)
+                Text((if(visit.pinned)"置顶 · "else"")+visitLabel(visit.visitedAt),Modifier.padding(top=4.dp),fontSize=9.sp,color=Muted)
             }
         }
     } else LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(start=22.dp,end=22.dp,bottom=24.dp)) {
@@ -326,9 +332,9 @@ fun GroveApp(model:GroveViewModel) {
                         Text(visit.repo.owner+if(project?.isPrivate==true)" · 私有"else"",fontSize=9.sp,color=Muted)
                         Text(visit.repo.name,fontFamily=FontFamily.Serif,fontWeight=FontWeight.Bold,fontSize=20.sp,maxLines=2,overflow=TextOverflow.Ellipsis)
                         if(!project?.description.isNullOrBlank())Text(project!!.description,fontSize=12.sp,lineHeight=20.sp,color=Muted,maxLines=2,overflow=TextOverflow.Ellipsis)
-                        Text(listOfNotNull(visitLabel(visit.visitedAt),project?.language?.takeIf{it.isNotBlank()},project?.let{"☆ ${formatStars(it.stars)}"}).joinToString("  ·  "),fontSize=9.sp,color=Muted)
+                        Text(listOfNotNull(if(visit.pinned)"置顶"else null,visitLabel(visit.visitedAt),project?.language?.takeIf{it.isNotBlank()},project?.let{"☆ ${formatStars(it.stars)}"}).joinToString("  ·  "),fontSize=9.sp,color=Muted)
                     }
-                    RecentProjectMenu(visit.repo){model.removeRecentRepository(visit.repo)}
+                    RecentProjectMenu(visit.repo,visit.pinned,{model.toggleRecentPin(visit.repo)}){model.removeRecentRepository(visit.repo)}
                 }
                 HorizontalDivider(color=Rule)
             }
@@ -336,11 +342,12 @@ fun GroveApp(model:GroveViewModel) {
     }
 }
 
-@Composable private fun RecentProjectMenu(repo:RepoId,onRemove:()->Unit) {
+@Composable private fun RecentProjectMenu(repo:RepoId,pinned:Boolean,onPin:()->Unit,onRemove:()->Unit) {
     var expanded by remember(repo.fullName){mutableStateOf(false)}
     Box {
         IconButton(onClick={expanded=true},modifier=Modifier.size(44.dp)){Icon(Icons.Outlined.MoreHoriz,"项目操作 ${repo.fullName}",Modifier.size(18.dp),tint=Muted)}
         DropdownMenu(expanded=expanded,onDismissRequest={expanded=false}) {
+            DropdownMenuItem(text={Text(if(pinned)"取消置顶"else"置顶项目",fontSize=12.sp)},leadingIcon={Icon(Icons.Outlined.PushPin,null,Modifier.size(16.dp))},onClick={expanded=false;onPin()})
             DropdownMenuItem(text={Text("移除访问记录",fontSize=12.sp)},leadingIcon={Icon(Icons.Outlined.Close,null,Modifier.size(16.dp))},onClick={expanded=false;onRemove()})
         }
     }
@@ -388,11 +395,13 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
 @Composable private fun ColumnScope.DiscoveryPage(s:GroveState,model:GroveViewModel,listState:LazyListState,categoryScroll:ScrollState) {
     LoadOnScrollEnd(listState,s.discoverPage,s.moreDiscoveries&&!s.loading&&s.error==null){model.discover(more=true)}
     var languages by remember {mutableStateOf(false)}
+    var search by rememberSaveable(s.username){mutableStateOf(s.discoveryQuery.isNotBlank())}
     val pullState=rememberPullToRefreshState()
     CompactHeader("发现") {
-        IconButton(onClick=model::refreshDiscoveries,enabled=!s.loading){Icon(Icons.Outlined.Refresh,"刷新发现",Modifier.size(19.dp))}
+        IconButton(onClick={search=!search;if(!search)model.searchDiscoveries("")}){Icon(if(search)Icons.Outlined.Close else Icons.Outlined.Search,if(search)"关闭发现搜索"else"搜索发现",Modifier.size(19.dp))}
     }
     HorizontalDivider(color=Rule)
+    if(search)InlineSearch(s.discoveryQuery,model::searchDiscoveries,"搜索 GitHub 项目","清除发现搜索")
     Row(Modifier.fillMaxWidth().horizontalScroll(categoryScroll).padding(horizontal=20.dp,vertical=6.dp),horizontalArrangement=Arrangement.spacedBy(7.dp)) {
         Category.entries.forEach {category->FilterChip(selected=s.category==category,onClick={model.discoveryFilter(category=category)},label={Text(category.label,fontSize=10.sp)},shape=androidx.compose.foundation.shape.RoundedCornerShape(2.dp))}
     }
@@ -406,7 +415,7 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
         }
     }
     HorizontalDivider(color=Rule)
-    Text(if(s.newProjects)"近 30 天创建 · 按累计 Star 排序" else "${s.category.label}领域 · 按累计 Star 排序",Modifier.padding(horizontal=22.dp,vertical=11.dp),fontSize=9.sp,color=Muted)
+    Text((if(s.discoveryQuery.isNotBlank())"GitHub 搜索 · "else"")+(if(s.newProjects)"近 30 天创建 · 按累计 Star 排序" else "${s.category.label}领域 · 按累计 Star 排序"),Modifier.padding(horizontal=22.dp,vertical=11.dp),fontSize=9.sp,color=Muted)
     if(s.loading&&!s.discoverRefreshing)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp),color=Muted,trackColor=Rule)
     s.error?.let {ErrorNotice(it,model::retry)}
     PullToRefreshBox(isRefreshing=s.discoverRefreshing,onRefresh={if(!s.loading)model.refreshDiscoveries()},state=pullState,
@@ -426,24 +435,21 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
     val starQuery=s.starSearchQuery
     var bookmarkQuery by rememberSaveable(s.username){mutableStateOf("")}
     val query=if(starTab)starQuery else bookmarkQuery
+    var search by rememberSaveable(s.username,starTab){mutableStateOf(query.isNotBlank())}
     val searching=starQuery.isNotBlank()
     val stars=if(searching)s.starSearchResults else s.stars
     val bookmarks=remember(s.bookmarks,bookmarkQuery){s.bookmarks.filter{(it.repo.fullName+" "+it.path+" "+it.ref).contains(bookmarkQuery.trim(),true)}}
-    val listState=key(starTab,s.username){rememberLazyListState()}
+    val listState=rememberLazyListState()
     LaunchedEffect(query,starTab){listState.scrollToItem(0)}
     val pullState=rememberPullToRefreshState()
     LoadOnScrollEnd(listState,s.starPage,starTab&&!searching&&s.username.isNotBlank()&&s.moreStars&&!s.loading&&!s.starSearchBusy&&s.error==null){model.loadStars(true)}
     CompactHeader("收藏") {
-        if(!starTab||s.username.isNotBlank())IconButton(onClick=model::refreshSaved,enabled=!s.starSearchBusy&&!s.loading){Icon(Icons.Outlined.Refresh,"刷新收藏",Modifier.size(19.dp))}
+        IconButton(onClick={search=!search;if(!search){if(starTab)model.searchStars("")else bookmarkQuery=""}}){Icon(if(search)Icons.Outlined.Close else Icons.Outlined.Search,if(search)"关闭收藏搜索"else"搜索收藏",Modifier.size(19.dp))}
     }
     Row(Modifier.padding(horizontal=15.dp)) {TextButton(onClick={model.selectSavedTab(false)},modifier=Modifier.semantics{selected=starTab}){Text("仓库 Star",fontSize=12.sp,fontWeight=if(starTab)FontWeight.Bold else FontWeight.Normal)}
         TextButton(onClick={model.selectSavedTab(true)},modifier=Modifier.semantics{selected=!starTab}){Text("文档书签 ${s.bookmarks.size}",fontSize=12.sp,fontWeight=if(!starTab)FontWeight.Bold else FontWeight.Normal)}}
     HorizontalDivider(color=Rule)
-    OutlinedTextField(value=query,onValueChange={if(starTab)model.searchStars(it) else bookmarkQuery=it},
-        modifier=Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=10.dp),singleLine=true,
-        placeholder={Text(if(starTab)"搜索仓库名、作者或简介"else"搜索文件名、路径或仓库",fontSize=12.sp)},
-        leadingIcon={Icon(Icons.Outlined.Search,null,Modifier.size(18.dp))},
-        trailingIcon={if(query.isNotEmpty())IconButton(onClick={if(starTab)model.searchStars("")else bookmarkQuery=""}){Icon(Icons.Outlined.Close,"清除收藏搜索",Modifier.size(17.dp))}})
+    if(search)InlineSearch(query,{if(starTab)model.searchStars(it)else bookmarkQuery=it},if(starTab)"搜索仓库名、作者或简介"else"搜索文件名、路径或仓库","清除收藏搜索")
     if(starTab&&s.username.isNotBlank()) {
         if((s.loading||s.starSearchBusy)&&!s.savedRefreshing)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp),color=Muted)
         if(!searching)s.error?.let {ErrorNotice(it,model::retry)}
@@ -456,6 +462,7 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
         }
         Text(summary,Modifier.padding(horizontal=22.dp,vertical=5.dp),fontSize=9.sp,color=Muted)
     }
+    key(s.username,starTab) {
     PullToRefreshBox(isRefreshing=s.savedRefreshing,onRefresh=model::refreshSaved,state=pullState,
         modifier=Modifier.weight(1f).fillMaxWidth(),indicator={
             Indicator(modifier=Modifier.align(Alignment.TopCenter),isRefreshing=s.savedRefreshing,state=pullState,containerColor=Paper,color=Ink)
@@ -480,26 +487,38 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
         }}
     }
     }
+    }
+}
+
+@Composable private fun InlineSearch(query:String,onQuery:(String)->Unit,placeholder:String,clearLabel:String) {
+    val focus=remember{FocusRequester()}
+    val focusManager=LocalFocusManager.current
+    LaunchedEffect(Unit){focus.requestFocus()}
+    OutlinedTextField(value=query,onValueChange=onQuery,
+        modifier=Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=10.dp).focusRequester(focus),singleLine=true,
+        placeholder={Text(placeholder,fontSize=12.sp)},leadingIcon={Icon(Icons.Outlined.Search,null,Modifier.size(18.dp))},
+        keyboardOptions=KeyboardOptions(imeAction=ImeAction.Search),keyboardActions=KeyboardActions(onSearch={focusManager.clearFocus()}),
+        trailingIcon={if(query.isNotEmpty())IconButton(onClick={onQuery("")}){Icon(Icons.Outlined.Close,clearLabel,Modifier.size(17.dp))}})
 }
 
 @Composable private fun ColumnScope.ProfilePage(s:GroveState,model:GroveViewModel,settings:()->Unit,about:()->Unit,projects:()->Unit,addedRepos:()->Unit) {
     val context=LocalContext.current
     var more by remember {mutableStateOf(false)}
     CompactHeader("我的") {
-        Box {
-            IconButton(onClick={more=true}){Icon(Icons.Outlined.MoreHoriz,"更多功能",Modifier.size(22.dp))}
-            DropdownMenu(expanded=more,onDismissRequest={more=false}) {
-                DropdownMenuItem(text={Text("阅读偏好")},leadingIcon={Icon(Icons.Outlined.TextFields,null)},onClick={more=false;settings()})
-                DropdownMenuItem(text={Text("已添加的仓库")},leadingIcon={Icon(Icons.Outlined.FolderOpen,null)},onClick={more=false;addedRepos()})
-                if(s.username.isNotBlank()&&BuildConfig.GITHUB_APP_SLUG.isNotBlank())DropdownMenuItem(text={Text("仓库授权")},leadingIcon={Icon(Icons.Outlined.Lock,null)},onClick={
-                    more=false;contextOpen(context,"https://github.com/apps/${BuildConfig.GITHUB_APP_SLUG}/installations/new")
-                })
-                DropdownMenuItem(text={Text("关于 Grove")},leadingIcon={Icon(Icons.Outlined.Info,null)},onClick={more=false;about()})
-                if(s.username.isNotBlank()) {
-                    HorizontalDivider(color=Rule)
-                    DropdownMenuItem(text={Text("退出登录")},leadingIcon={Icon(Icons.AutoMirrored.Outlined.Logout,null)},onClick={more=false;model.logout()})
-                }
+        IconButton(onClick={more=true}){Icon(Icons.Outlined.MoreHoriz,"更多功能",Modifier.size(22.dp))}
+    }
+    if(more)ModalBottomSheet(onDismissRequest={more=false},containerColor=Paper,tonalElevation=0.dp) {
+        CompactHeader("更多功能") {IconButton(onClick={more=false}){Icon(Icons.Outlined.Close,"关闭更多功能",Modifier.size(19.dp))}}
+        HorizontalDivider(color=Rule)
+        Column(Modifier.fillMaxWidth().heightIn(max=480.dp).verticalScroll(rememberScrollState()).padding(horizontal=24.dp)) {
+            MoreAction(Icons.Outlined.TextFields,"阅读偏好"){more=false;settings()}
+            MoreAction(Icons.Outlined.FolderOpen,"已添加的仓库"){more=false;addedRepos()}
+            if(s.username.isNotBlank()&&BuildConfig.GITHUB_APP_SLUG.isNotBlank())MoreAction(Icons.Outlined.Lock,"仓库授权"){
+                more=false;contextOpen(context,"https://github.com/apps/${BuildConfig.GITHUB_APP_SLUG}/installations/new")
             }
+            MoreAction(Icons.Outlined.Info,"关于 Grove"){more=false;about()}
+            if(s.username.isNotBlank())MoreAction(Icons.AutoMirrored.Outlined.Logout,"退出登录"){more=false;model.logout()}
+            Spacer(Modifier.height(18.dp))
         }
     }
     HorizontalDivider(color=Rule)
@@ -538,6 +557,14 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
         }
         Text("阅读位置和文档书签保存在本机",Modifier.padding(top=26.dp,bottom=24.dp),fontSize=9.sp,color=Muted)
     }
+}
+@Composable private fun MoreAction(icon:ImageVector,title:String,action:()->Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick=action).padding(vertical=19.dp),verticalAlignment=Alignment.CenterVertically) {
+        Icon(icon,null,Modifier.size(19.dp),tint=Muted)
+        Text(title,Modifier.weight(1f).padding(horizontal=16.dp),fontSize=13.sp,color=Ink)
+        Icon(Icons.Outlined.ChevronRight,null,Modifier.size(14.dp),tint=Muted)
+    }
+    HorizontalDivider(color=Rule)
 }
 @Composable private fun PreferenceRow(icon:ImageVector,title:String,description:String,click:()->Unit) {
     Column {Row(Modifier.fillMaxWidth().clickable(onClick=click).padding(vertical=20.dp),verticalAlignment=Alignment.CenterVertically) {

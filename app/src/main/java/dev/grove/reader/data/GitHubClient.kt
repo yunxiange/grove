@@ -204,8 +204,8 @@ class GitHubClient(private val cacheDir: File, private val token: () -> String =
         val array = JSONArray(request("/repos/${id.fullName}/branches?per_page=100&page=$page"))
         return (0 until array.length()).map { array.getJSONObject(it).getString("name") }
     }
-    suspend fun discover(category: Category, language: String, createdAfter: String?, page: Int, allowCache:Boolean=true): List<Project> {
-        val query = encode(discoveryQuery(category, language, createdAfter))
+    suspend fun discover(category: Category, language: String, createdAfter: String?, page: Int, allowCache:Boolean=true,keyword:String=""): List<Project> {
+        val query = encode(discoveryQuery(category, language, createdAfter,keyword))
         val result = JSONObject(request("/search/repositories?q=$query&sort=stars&order=desc&per_page=30&page=$page",allowCache))
         return parseProjects(result.getJSONArray("items"))
     }

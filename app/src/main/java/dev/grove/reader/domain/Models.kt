@@ -43,7 +43,7 @@ data class Document(val repo: RepoId, val ref: String, val path: String, val con
     val url get() = originUrl ?: (rawRoot + encodePath(path))
 }
 data class UserProfile(val id: String, val login: String)
-data class RepositoryVisit(val repo:RepoId,val visitedAt:Long)
+data class RepositoryVisit(val repo:RepoId,val visitedAt:Long,val pinned:Boolean=false)
 enum class RecentSort(val label:String) { VISITED("访问时间"), NAME("项目名称"), STARS("Star 数") }
 data class Bookmark(val repo: RepoId, val ref: String, val path: String, val progress: Float = 0f) {
     val key get() = "${repo.fullName}:$ref:$path"
@@ -64,8 +64,9 @@ enum class Category(val label: String, val qualifier: String) {
 
 fun encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
 fun encodePath(value: String): String = value.split('/').joinToString("/") { encode(it) }
-fun discoveryQuery(category: Category, language: String, createdAfter: String?): String = buildList {
-    add("stars:>10"); add("archived:false"); add("fork:false")
+fun discoveryQuery(category: Category, language: String, createdAfter: String?,keyword:String=""): String = buildList {
+    if(keyword.isBlank())add("stars:>10")else add(keyword.trim())
+    add("archived:false"); add("fork:false")
     if (category.qualifier.isNotBlank()) add(category.qualifier)
     if (language.isNotBlank()) add("language:$language")
     if (createdAfter != null) add("created:>=$createdAfter")

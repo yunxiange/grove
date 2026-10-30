@@ -135,7 +135,7 @@ class PaginationUiTest {
         assertEquals(before+1,requestCount("/user/starred"));assertFalse(model.state.value.savedRefreshing)
     }
     @Test fun pullRefreshRebuildsCompleteStarSearchAndKeepsQuery() {
-        openStars();compose.onNode(hasSetTextAction()).performTextInput("needle");awaitSearch()
+        openStars();compose.onNodeWithContentDescription("搜索收藏").performClick();compose.onNode(hasSetTextAction()).performTextInput("needle");awaitSearch()
         compose.onNodeWithText("needle-final").assertIsDisplayed()
         assertEquals(61,model.state.value.starSearchScanned)
         val before=requestCount("/user/starred");edition=2;pull();awaitSearch()
@@ -155,6 +155,7 @@ class PaginationUiTest {
     }
     @Test fun localBookmarkPullRefreshReloadsStorageAndRetainsSearch() {
         compose.runOnIdle{model.openSaved(true)}
+        compose.onNodeWithContentDescription("搜索收藏").performClick()
         compose.onNode(hasSetTextAction()).performTextInput("guide")
         val store=ReadingStore(app,"100")
         store.saveBookmarks(listOf(Bookmark(RepoId("owner","project"),"main","guide.md")))

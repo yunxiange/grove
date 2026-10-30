@@ -67,4 +67,28 @@ class RecentRepositoriesTest {
         assertEquals(listOf(b,a,c),sortedRecentVisits(visits,projects,RecentSort.STARS).map{it.repo})
         assertEquals(c,visits.first().repo)
     }
+    @Test fun pinsPersistAcrossVisitsAndNeverGetEvictedByNewHistory() {
+        val store=ReadingStore(context,"100");val pin=RepoId("owner","keep")
+        store.recordVisit(pin,1);store.setVisitPinned(pin,true)
+        for(i in 1..40)store.recordVisit(RepoId("owner","recent-$i"),i+1L)
+        val restored=ReadingStore(context,"100")
+        assertEquals(31,restored.recentVisits().size)
+        assertTrue(restored.recentVisits().first{it.repo==pin}.pinned)
+        assertTrue(ReadingStore(context,"200").recentVisits().isEmpty())
+        restored.recordVisit(RepoId("OWNER","KEEP"),100)
+        assertEquals(1,restored.recentVisits().count{it.repo.fullName.equals(pin.fullName,true)})
+        assertTrue(restored.recentVisits().first().pinned)
+        restored.setVisitPinned(pin,false)
+        assertFalse(restored.recentVisits().any{it.pinned})
+        assertEquals(30,restored.recentVisits().size)
+    }
+    @Test fun pinnedProjectsLeadEverySortAndViewChoicePersistsPerAccount() {
+        val a=RepoId("owner","alpha");val z=RepoId("owner","zeta")
+        val visits=listOf(RepositoryVisit(a,100),RepositoryVisit(z,1,true))
+        RecentSort.entries.forEach{sort->assertEquals(z,sortedRecentVisits(visits,mapOf(a.fullName to Project(a,stars=100)),sort).first().repo)}
+        ReadingStore(context,"100").libraryGrid=true
+        assertTrue(ReadingStore(context,"100").libraryGrid)
+        assertFalse(ReadingStore(context,"200").libraryGrid)
+        assertFalse(ReadingStore(context).libraryGrid)
+    }
 }
