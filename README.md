@@ -24,6 +24,13 @@
 
 仓库页目前展示最近访问；登录后的全部账号项目位于「我的 → 我的项目」。访客可以阅读公开仓库，自己的 GitHub 账号授权后可访问获准的私有仓库。
 
+## 下载体验版
+
+- [下载 Android APK · v0.3.2](https://github.com/yunxiange/grove/releases/download/v0.3.2/Grove-0.3.2-debug.apk)
+- [版本说明与附件](https://github.com/yunxiange/grove/releases/tag/v0.3.2) · [SHA-256 校验文件](https://github.com/yunxiange/grove/releases/download/v0.3.2/Grove-0.3.2-SHA256.txt)
+
+目前提供使用开发签名的预发布 APK，支持 Android 8.0+；尚未完成真机验收。下载后可在 Android 设备上直接安装。
+
 ## 本地构建
 
 需要 **JDK 17+、Android SDK 35、Build Tools 35.0.0**。用 Android Studio 打开项目，或设置好 `JAVA_HOME` 与 Android SDK 后执行：
