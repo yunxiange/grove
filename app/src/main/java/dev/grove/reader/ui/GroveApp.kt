@@ -1,0 +1,668 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
+package dev.grove.reader.ui
+
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.net.Uri
+import android.app.Activity
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.*
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults.Indicator
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.grove.reader.BuildConfig
+import dev.grove.reader.GroveState
+import dev.grove.reader.GroveViewModel
+import dev.grove.reader.domain.*
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+val Paper=Color(0xFFF9F7F1)
+val Ink=Color(0xFF302E28)
+val Muted=Color(0xFF706C63)
+val Rule=Color(0xFFD8D1C4)
+private val PaperColors=lightColorScheme(primary=Ink,onPrimary=Paper,secondary=Muted,background=Paper,
+    surface=Paper,onSurface=Ink,onBackground=Ink,surfaceVariant=Color(0xFFEFEAE0),onSurfaceVariant=Muted,
+    outline=Rule,outlineVariant=Rule,primaryContainer=Color(0xFFE8E2D5),onPrimaryContainer=Ink)
+
+@Composable
+fun GroveApp(model:GroveViewModel) {
+    val s by model.state.collectAsStateWithLifecycle()
+    // Keep list state above the navigation branches: repository details remove DiscoveryPage.
+    val discoveryListState=rememberSaveable(s.category,s.language,s.newProjects,s.username,s.discoveryRevision,saver=LazyListState.Saver){LazyListState()}
+    val discoveryCategoryScroll=rememberSaveable(s.username,saver=ScrollState.Saver){ScrollState(0)}
+    val context=LocalContext.current
+    val imageSaveLauncher=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){result->
+        model.finishImageSave(if(result.resultCode==Activity.RESULT_OK)result.data?.data else null)
+    }
+    LaunchedEffect(s.imageSavePrompt) {
+        s.imageSavePrompt?.let{prompt->
+            model.imagePickerOpened()
+            try {imageSaveLauncher.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{
+                addCategory(Intent.CATEGORY_OPENABLE);type=prompt.mimeType;putExtra(Intent.EXTRA_TITLE,prompt.fileName)
+            })}catch(_:ActivityNotFoundException){model.imageSaveFailed("未找到系统文件保存窗口，请检查设备设置。")}
+        }
+    }
+    LaunchedEffect(s.imageSaveMessage) {
+        s.imageSaveMessage?.let{Toast.makeText(context,it,Toast.LENGTH_LONG).show();model.clearImageSaveMessage()}
+    }
+    LaunchedEffect(s.imageSaving) {
+        if(s.imageSaving)Toast.makeText(context,"正在保存图片…",Toast.LENGTH_SHORT).show()
+    }
+    var add by remember {mutableStateOf(false)}
+    var settings by remember {mutableStateOf(false)}
+    var branches by remember {mutableStateOf(false)}
+    var toc by remember {mutableStateOf(false)}
+    var about by remember {mutableStateOf(false)}
+    var imports by remember {mutableStateOf(false)}
+    var importing by remember {mutableStateOf(false)}
+    var addedRepos by remember {mutableStateOf(false)}
+    LaunchedEffect(imports,s.username){if(imports&&s.username.isNotBlank())model.loadMyRepositories()}
+    var jump by remember(s.document?.key) {mutableStateOf<String?>(null)}
+    fun openLink(url:String) {
+        if(model.followLink(url))return
+        val uri=Uri.parse(url)
+        if(uri.scheme in listOf("https","http","mailto")) try { context.startActivity(Intent(Intent.ACTION_VIEW,uri)) } catch(_:ActivityNotFoundException) {}
+    }
+    MaterialTheme(colorScheme=PaperColors,typography=Typography(),shapes=Shapes(
+        extraSmall=androidx.compose.foundation.shape.RoundedCornerShape(2.dp),
+        small=androidx.compose.foundation.shape.RoundedCornerShape(3.dp),
+        medium=androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+        large=androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
+        extraLarge=androidx.compose.foundation.shape.RoundedCornerShape(8.dp))) {
+        BackHandler(enabled=s.project!=null){model.back()}
+        Scaffold(containerColor=Paper,bottomBar={if(!s.immersive)BottomNavigation(s.destination,model::navigate)}) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                if(s.project!=null) {
+                    if(!s.immersive) {
+                        CompactHeader(s.project!!.id.name,onBack=model::back,subtitle=s.project!!.id.owner) {
+                            RepositoryStar(s.project!!,s,model)
+                            TextButton(onClick={branches=true;model.loadBranches()}) {Icon(Icons.Outlined.AccountTree,null,Modifier.size(13.dp));Spacer(Modifier.width(4.dp));Text(s.ref,fontSize=10.sp,maxLines=1,overflow=TextOverflow.Ellipsis)}
+                        }
+                        Row(Modifier.fillMaxWidth().padding(horizontal=20.dp)) {
+                            RepoTab.entries.forEach { tab ->
+                                TextButton(onClick={model.selectTab(tab)},modifier=Modifier.weight(1f)) {
+                                    Text(tab.label,fontSize=12.sp,color=if(s.tab==tab)Ink else Muted,fontWeight=if(s.tab==tab)FontWeight.Bold else FontWeight.Normal)
+                                }
+                            }
+                        }
+                        HorizontalDivider(color=Rule)
+                    }
+                    if(s.loading)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp),color=Muted,trackColor=Rule)
+                    s.error?.let { ErrorNotice(it,model::retry) }
+                    when(s.tab) {
+                        RepoTab.READ -> ReaderPage(s,model,{settings=true},{toc=true},{jump=null;model.selectTab(RepoTab.FILES)},::openLink,jump)
+                        RepoTab.FILES -> FilesPage(s,model)
+                        RepoTab.ISSUES -> IssuesPage(s,model,::openLink)
+                    }
+                } else {
+                    when(s.destination) {
+                        Destination.LIBRARY -> LibraryPage(s,model,onAdd={add=true},onProjects={importing=false;imports=true})
+                        Destination.SAVED -> SavedPage(s,model)
+                        Destination.DISCOVER -> DiscoveryPage(s,model,discoveryListState,discoveryCategoryScroll)
+                        Destination.PROFILE -> ProfilePage(s,model,{settings=true},{about=true},{importing=false;imports=true},{addedRepos=true})
+                    }
+                }
+            }
+        }
+        if(add)AddRepositoryDialog({add=false},model::addRepository){add=false;importing=true;imports=true}
+        if(s.imageToSave!=null)ModalBottomSheet(onDismissRequest=model::dismissImageActions,containerColor=Paper) {
+            Text("图片",Modifier.padding(start=24.dp,bottom=10.dp),fontFamily=FontFamily.Serif,fontSize=20.sp)
+            Row(Modifier.fillMaxWidth().clickable(onClick=model::saveSelectedImage).padding(horizontal=24.dp,vertical=20.dp),verticalAlignment=Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Download,null,Modifier.size(21.dp),tint=Muted)
+                Text("保存图片",Modifier.padding(start=16.dp),fontSize=14.sp)
+            }
+            Text("保存原始图片到设备",Modifier.padding(start=24.dp,bottom=24.dp),fontSize=10.sp,color=Muted)
+        }
+        if(imports)ModalBottomSheet(onDismissRequest={imports=false},containerColor=Paper) {
+            val listState=rememberLazyListState()
+            LoadOnScrollEnd(listState,s.userRepoPage,s.moreUserRepos&&!s.loading&&s.error==null&&s.username.isNotBlank()){model.loadMyRepositories(true)}
+            CompactHeader(if(importing)"导入 GitHub 仓库"else"我的项目") {IconButton(onClick={model.loadMyRepositories()}){Icon(Icons.Outlined.Refresh,"刷新")}}
+            if(s.username.isBlank()){Text("登录后查看你的公开与私有仓库。",Modifier.padding(24.dp),fontSize=12.sp);Button(onClick=model::login,modifier=Modifier.padding(24.dp)){Text("登录 GitHub")}}
+            if(s.loading)LinearProgressIndicator(Modifier.fillMaxWidth(),color=Muted)
+            s.error?.let{ErrorNotice(it,model::retry)}
+            LazyColumn(Modifier.heightIn(max=430.dp).padding(horizontal=22.dp),state=listState){
+                if(s.username.isNotBlank()&&s.userRepos.isEmpty()&&!s.loading&&s.error==null)item{EmptyNotice("暂时没有可访问的项目。","私有仓库需要先授予账号访问权限，再回来刷新。")}
+                items(s.userRepos,key={it.id.fullName}){repo->ProjectRow(repo,onClick={imports=false;if(importing)model.addRepository(repo.id.fullName)else model.openRepository(repo.id)})}
+                if(s.moreUserRepos)item{PageLoading(s.loading)}
+            }
+            if(s.username.isNotBlank()&&BuildConfig.GITHUB_APP_SLUG.isNotBlank())TextButton(onClick={openLink("https://github.com/apps/${BuildConfig.GITHUB_APP_SLUG}/installations/new")},modifier=Modifier.padding(14.dp)){Text("管理私有仓库访问权限",fontSize=11.sp)}
+        }
+        if(addedRepos)ModalBottomSheet(onDismissRequest={addedRepos=false},containerColor=Paper) {
+            CompactHeader("已添加的仓库")
+            LazyColumn(Modifier.heightIn(max=430.dp).padding(horizontal=22.dp)) {
+                if(s.library.isEmpty())item{EmptyNotice("还没有手动添加的仓库。","使用仓库页右上角 + 添加，或从 GitHub 导入。")}
+                items(s.library,key={it.fullName}){id->
+                    Row(verticalAlignment=Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f)){ProjectRow(s.projects[id.fullName]?:Project(id),onClick={addedRepos=false;model.openRepository(id)})}
+                        IconButton(onClick={model.removeRepository(id)}){Icon(Icons.Outlined.Close,"移除已添加的 ${id.fullName}",Modifier.size(18.dp))}
+                    }
+                }
+            }
+        }
+        if(settings)ModalBottomSheet(onDismissRequest={settings=false},containerColor=Paper) {
+            Column(Modifier.fillMaxWidth().padding(24.dp),verticalArrangement=Arrangement.spacedBy(17.dp)) {
+                Text("阅读偏好",fontSize=20.sp,fontFamily=FontFamily.Serif)
+                Row(verticalAlignment=Alignment.CenterVertically) {
+                    Text("文字大小",Modifier.weight(1f),fontSize=13.sp)
+                    IconButton(onClick={model.settings(font=s.fontSize-1)}){Icon(Icons.Outlined.Remove,"缩小文字")}
+                    Text("${s.fontSize}",fontSize=14.sp)
+                    IconButton(onClick={model.settings(font=s.fontSize+1)}){Icon(Icons.Outlined.Add,"放大文字")}
+                }
+                Text("纸面颜色",fontSize=12.sp,color=Muted)
+                Row(horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                    FilterChip(selected=!s.warm,onClick={model.settings(warm=false)},label={Text("纸白")})
+                    FilterChip(selected=s.warm,onClick={model.settings(warm=true)},label={Text("暖纸")})
+                }
+                Spacer(Modifier.height(14.dp))
+            }
+        }
+        if(branches)ModalBottomSheet(onDismissRequest={branches=false},containerColor=Paper) {
+            Text("切换分支",Modifier.padding(horizontal=24.dp,vertical=12.dp),fontFamily=FontFamily.Serif,fontSize=21.sp)
+            if(s.loading&&s.branches.isEmpty())CircularProgressIndicator(Modifier.padding(24.dp).size(24.dp),color=Muted)
+            LazyColumn(Modifier.heightIn(max=390.dp)) {
+                items(s.branches) {ref-> Row(Modifier.fillMaxWidth().clickable {branches=false;model.chooseBranch(ref)}.padding(horizontal=24.dp,vertical=17.dp),verticalAlignment=Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.AccountTree,null,Modifier.size(17.dp));Spacer(Modifier.width(13.dp));Text(ref,Modifier.weight(1f),fontSize=13.sp)
+                    if(s.ref==ref)Icon(Icons.Outlined.Check,"当前分支",Modifier.size(17.dp))
+                }}
+            }
+            Text("显示前 100 个分支",Modifier.padding(24.dp),color=Muted,fontSize=10.sp)
+        }
+        if(toc)ModalBottomSheet(onDismissRequest={toc=false},containerColor=Paper) {
+            Text("阅读目录",Modifier.padding(24.dp),fontSize=21.sp,fontFamily=FontFamily.Serif)
+            if(s.headings.isEmpty())Text("当前文档暂无章节目录。",Modifier.padding(24.dp),fontSize=13.sp,color=Muted)
+            LazyColumn(Modifier.heightIn(max=440.dp)) {items(s.headings){ h ->
+                Text(h.text,Modifier.fillMaxWidth().clickable {jump=h.id;toc=false}.padding(start=(24+(h.level-1)*10).dp,end=24.dp,top=14.dp,bottom=14.dp),fontSize=13.sp,color=if(h.level==1)Ink else Muted)
+            }}
+        }
+        if(about)AlertDialog(onDismissRequest={about=false},title={Text("关于 Grove",fontFamily=FontFamily.Serif)},text={Text("一座随身的开源图书馆。\n\n墨与纸 · ${BuildConfig.VERSION_NAME}\n\n仓库与讨论来自 GitHub。文档书签、阅读位置和偏好保存在本机。发现按累计 Star 或近 30 天新项目排序。",lineHeight=23.sp)},confirmButton={TextButton(onClick={about=false}){Text("知道了")}})
+        if(s.authError!=null)AlertDialog(onDismissRequest=model::cancelLogin,title={Text("GitHub 登录")},text={Text(s.authError!!,lineHeight=24.sp)},confirmButton={TextButton(onClick=model::cancelLogin){Text("继续阅读")}})
+        if(s.starError!=null)AlertDialog(onDismissRequest=model::clearStarError,title={Text("GitHub Star")},text={Text(s.starError!!,lineHeight=24.sp)},confirmButton={TextButton(onClick=model::clearStarError){Text("知道了")}})
+        if(s.authDevice!=null)AlertDialog(onDismissRequest=model::cancelLogin,title={Text("授权 GitHub")},text={Column(verticalArrangement=Arrangement.spacedBy(15.dp)) {
+            Text("在 GitHub 授权页输入以下代码：",fontSize=13.sp)
+            SelectionContainer {Text(s.authDevice!!.userCode,fontFamily=FontFamily.Monospace,fontSize=27.sp)}
+            Text("授权完成后，Grove 会自动登录。",fontSize=12.sp,color=Muted)
+            LinearProgressIndicator(Modifier.fillMaxWidth(),color=Muted)
+        }},confirmButton={TextButton(onClick={openLink(s.authDevice!!.verificationUri)}){Text("打开 GitHub")}},dismissButton={TextButton(onClick=model::cancelLogin){Text("取消")}})
+    }
+}
+
+@Composable private fun BottomNavigation(selected:Destination,onSelect:(Destination)->Unit) {
+    Column {HorizontalDivider(color=Rule);NavigationBar(containerColor=Paper,tonalElevation=0.dp,windowInsets=WindowInsets.navigationBars) {
+        Destination.entries.forEach {d->NavigationBarItem(selected=selected==d,onClick={onSelect(d)},icon={Icon(when(d){
+            Destination.LIBRARY->Icons.AutoMirrored.Outlined.MenuBook
+            Destination.SAVED->Icons.Outlined.BookmarkBorder
+            Destination.DISCOVER->Icons.Outlined.Explore
+            Destination.PROFILE->Icons.Outlined.PersonOutline
+        },d.label,Modifier.size(21.dp))},label={Text(d.label,fontSize=10.sp,fontWeight=if(selected==d)FontWeight.Bold else FontWeight.Normal)},colors=NavigationBarItemDefaults.colors(indicatorColor=Ink,selectedIconColor=Paper,unselectedIconColor=Muted,selectedTextColor=Ink,unselectedTextColor=Muted))}
+    }}
+}
+
+@Composable private fun CompactHeader(title:String,onBack:(()->Unit)?=null,subtitle:String?=null,actions:@Composable RowScope.()->Unit={}) {
+    Row(Modifier.fillMaxWidth().heightIn(min=53.dp).padding(start=if(onBack!=null)6.dp else 22.dp,end=9.dp),verticalAlignment=Alignment.CenterVertically) {
+        if(onBack!=null)IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"返回",Modifier.size(19.dp))}
+        Column(Modifier.weight(1f)) {
+            if(subtitle!=null)Text(subtitle,fontSize=9.sp,color=Muted,maxLines=1)
+            Text(title,fontSize=17.sp,fontWeight=FontWeight.Medium,maxLines=1,overflow=TextOverflow.Ellipsis)
+        }
+        actions()
+    }
+}
+
+@Composable private fun ErrorNotice(message:String,retry:()->Unit) {
+    Row(Modifier.fillMaxWidth().background(Color(0xFFEEE8DC)).padding(start=19.dp,end=8.dp,top=6.dp,bottom=6.dp),verticalAlignment=Alignment.CenterVertically) {
+        Text(message,Modifier.weight(1f),fontSize=11.sp,lineHeight=18.sp,color=Ink)
+        TextButton(onClick=retry){Text("重试",fontSize=11.sp)}
+    }
+}
+@Composable private fun EmptyNotice(title:String,description:String,icon:ImageVector=Icons.AutoMirrored.Outlined.MenuBook) {
+    Column(Modifier.fillMaxWidth().padding(30.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(15.dp)) {
+        Spacer(Modifier.height(12.dp));Icon(icon,null,Modifier.size(30.dp),tint=Muted)
+        Text(title,fontSize=19.sp,fontFamily=FontFamily.Serif)
+        Text(description,fontSize=12.sp,color=Muted,lineHeight=22.sp)
+    }
+}
+@Composable private fun BookCover(id:RepoId,modifier:Modifier=Modifier,small:Boolean=false) {
+    val dark=(id.fullName.hashCode() and 1)==0
+    val bg=if(dark)Color(0xFF3A3832)else Color(0xFFDAD5C9)
+    val fg=if(dark)Paper else Ink
+    Column(modifier.background(bg).border(1.dp,Color(0xFFB9B0A0)).padding(if(small)7.dp else 16.dp),verticalArrangement=Arrangement.SpaceBetween) {
+        Text(id.owner.uppercase(),color=fg.copy(alpha=.8f),fontSize=if(small)4.sp else 7.sp,maxLines=1)
+        Text(id.name.replace('-','\n'),color=fg,fontFamily=FontFamily.Serif,fontSize=if(small)11.sp else 25.sp,lineHeight=if(small)13.sp else 29.sp,maxLines=if(small)3 else 4,overflow=TextOverflow.Ellipsis)
+        Column {HorizontalDivider(Modifier.width(if(small)12.dp else 28.dp),color=fg.copy(alpha=.6f));Spacer(Modifier.height(6.dp));Text(if(small)"Grove" else "OPEN SOURCE EDITION",color=fg.copy(alpha=.8f),fontSize=if(small)5.sp else 6.sp,letterSpacing=1.sp)}
+    }
+}
+
+@Composable private fun ColumnScope.LibraryPage(s:GroveState,model:GroveViewModel,onAdd:()->Unit,onProjects:()->Unit) {
+    var search by remember {mutableStateOf(false)};var query by rememberSaveable {mutableStateOf("")};var grid by rememberSaveable {mutableStateOf(false)}
+    var sorting by remember {mutableStateOf(false)}
+    CompactHeader("最近访问") {
+        IconButton(onClick={search=!search}){Icon(Icons.Outlined.Search,"搜索最近项目",Modifier.size(20.dp))}
+        IconButton(onClick=onAdd){Icon(Icons.Outlined.Add,"添加仓库",Modifier.size(20.dp))}
+    }
+    HorizontalDivider(color=Rule)
+    if(search)OutlinedTextField(value=query,onValueChange={query=it},modifier=Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=8.dp),placeholder={Text("搜索最近访问的项目",fontSize=12.sp)},singleLine=true)
+    Row(Modifier.fillMaxWidth().padding(start=22.dp,end=14.dp),verticalAlignment=Alignment.CenterVertically) {
+        Text("${s.recentVisits.size} 个项目",Modifier.weight(1f),fontSize=10.sp,color=Muted)
+        Box {
+            TextButton(onClick={sorting=true}){Icon(Icons.AutoMirrored.Outlined.Sort,"排序最近项目",Modifier.size(15.dp));Text(" ${s.recentSort.label}",fontSize=10.sp)}
+            DropdownMenu(expanded=sorting,onDismissRequest={sorting=false}) {
+                RecentSort.entries.forEach{sort->DropdownMenuItem(text={Text(sort.label,fontSize=12.sp)},
+                    trailingIcon={if(sort==s.recentSort)Icon(Icons.Outlined.Check,null,Modifier.size(16.dp))},
+                    onClick={sorting=false;model.setRecentSort(sort)})}
+            }
+        }
+        IconButton(onClick={grid=!grid}){Icon(if(grid)Icons.AutoMirrored.Outlined.ViewList else Icons.Outlined.GridView,if(grid)"列表视图" else "封面视图",Modifier.size(17.dp))}
+    }
+    val visits=remember(s.recentVisits,s.projects,s.recentSort,query) {
+        sortedRecentVisits(s.recentVisits,s.projects,s.recentSort).filter{
+            (it.repo.fullName+" "+s.projects[it.repo.fullName]?.description.orEmpty()).contains(query,true)
+        }
+    }
+    if(visits.isEmpty()) {
+        if(s.recentVisits.isEmpty()) {
+            EmptyNotice("还没有访问过项目。","打开一个项目后，它会出现在这里。",Icons.Outlined.History)
+            Row(Modifier.align(Alignment.CenterHorizontally),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick={model.navigate(Destination.DISCOVER)}){Text("去发现",fontSize=12.sp)}
+                Button(onClick=onProjects){Text("我的项目",fontSize=12.sp)}
+            }
+        }else EmptyNotice("没有匹配的项目。","换个关键词再试试。",Icons.Outlined.Search)
+    }
+    if(grid)LazyVerticalGrid(columns=GridCells.Fixed(2),modifier=Modifier.weight(1f),contentPadding=PaddingValues(start=22.dp,end=22.dp,bottom=24.dp),horizontalArrangement=Arrangement.spacedBy(22.dp),verticalArrangement=Arrangement.spacedBy(23.dp)) {
+        gridItems(visits,key={it.repo.fullName}) {visit->val id=visit.repo
+            Column(Modifier.clickable {model.openRepository(id)}) {
+                BookCover(id,Modifier.fillMaxWidth().height(185.dp))
+                Row(verticalAlignment=Alignment.CenterVertically) {
+                    Text(id.name,Modifier.weight(1f).padding(top=9.dp),fontSize=12.sp,fontWeight=FontWeight.Medium,maxLines=1,overflow=TextOverflow.Ellipsis)
+                    RecentProjectMenu(id){model.removeRecentRepository(id)}
+                }
+                Text(id.owner,fontSize=9.sp,color=Muted,maxLines=1)
+                Text(visitLabel(visit.visitedAt),Modifier.padding(top=4.dp),fontSize=9.sp,color=Muted)
+            }
+        }
+    } else LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(start=22.dp,end=22.dp,bottom=24.dp)) {
+        items(visits,key={it.repo.fullName}){visit->
+            val project=s.projects[visit.repo.fullName]
+            Column(Modifier.fillMaxWidth().clickable{model.openRepository(visit.repo)}) {
+                Row(Modifier.padding(vertical=18.dp),verticalAlignment=Alignment.Top) {
+                    Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                        Text(visit.repo.owner+if(project?.isPrivate==true)" · 私有"else"",fontSize=9.sp,color=Muted)
+                        Text(visit.repo.name,fontFamily=FontFamily.Serif,fontWeight=FontWeight.Bold,fontSize=20.sp,maxLines=2,overflow=TextOverflow.Ellipsis)
+                        if(!project?.description.isNullOrBlank())Text(project!!.description,fontSize=12.sp,lineHeight=20.sp,color=Muted,maxLines=2,overflow=TextOverflow.Ellipsis)
+                        Text(listOfNotNull(visitLabel(visit.visitedAt),project?.language?.takeIf{it.isNotBlank()},project?.let{"☆ ${formatStars(it.stars)}"}).joinToString("  ·  "),fontSize=9.sp,color=Muted)
+                    }
+                    RecentProjectMenu(visit.repo){model.removeRecentRepository(visit.repo)}
+                }
+                HorizontalDivider(color=Rule)
+            }
+        }
+    }
+}
+
+@Composable private fun RecentProjectMenu(repo:RepoId,onRemove:()->Unit) {
+    var expanded by remember(repo.fullName){mutableStateOf(false)}
+    Box {
+        IconButton(onClick={expanded=true},modifier=Modifier.size(44.dp)){Icon(Icons.Outlined.MoreHoriz,"项目操作 ${repo.fullName}",Modifier.size(18.dp),tint=Muted)}
+        DropdownMenu(expanded=expanded,onDismissRequest={expanded=false}) {
+            DropdownMenuItem(text={Text("移除访问记录",fontSize=12.sp)},leadingIcon={Icon(Icons.Outlined.Close,null,Modifier.size(16.dp))},onClick={expanded=false;onRemove()})
+        }
+    }
+}
+
+private fun visitLabel(timestamp:Long):String {
+    if(timestamp==0L)return "上次阅读"
+    val date=Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault())
+    val today=LocalDate.now()
+    return when {
+        System.currentTimeMillis()-timestamp in 0..59_999 -> "刚刚"
+        date.toLocalDate()==today -> "今天 "+date.format(DateTimeFormatter.ofPattern("HH:mm"))
+        date.toLocalDate()==today.minusDays(1) -> "昨天 "+date.format(DateTimeFormatter.ofPattern("HH:mm"))
+        else -> date.format(DateTimeFormatter.ofPattern("yyyy/MM/dd"))
+    }
+}
+
+@Composable private fun ProjectRow(project:Project,onClick:()->Unit,index:Int?=null,starAction:(@Composable ()->Unit)?=null) {
+    Column(Modifier.fillMaxWidth().clickable(onClick=onClick)) {
+        Row(Modifier.padding(vertical=19.dp),horizontalArrangement=Arrangement.spacedBy(13.dp),verticalAlignment=Alignment.Top) {
+            if(index!=null)Text("%02d".format(index),fontFamily=FontFamily.Serif,fontSize=16.sp,color=Muted)
+            Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(7.dp)) {
+                Text(project.id.owner+(if(project.isPrivate)" · 私有"else""),fontSize=9.sp,color=Muted)
+                Text(project.id.name,fontSize=20.sp,fontFamily=FontFamily.Serif,fontWeight=FontWeight.Bold,maxLines=2,overflow=TextOverflow.Ellipsis)
+                if(project.description.isNotBlank())Text(project.description,fontSize=12.sp,lineHeight=21.sp,color=Muted,maxLines=3,overflow=TextOverflow.Ellipsis)
+                Text(listOfNotNull(project.language.takeIf{it.isNotBlank()},"☆ ${formatStars(project.stars)}").joinToString("  ·  "),fontSize=10.sp,color=Muted)
+            }
+            if(starAction!=null)starAction() else Icon(Icons.Outlined.ChevronRight,null,Modifier.padding(top=14.dp).size(14.dp),tint=Muted)
+        }
+        HorizontalDivider(color=Rule)
+    }
+}
+@Composable private fun RepositoryStar(project:Project,s:GroveState,model:GroveViewModel) {
+    val key=project.id.fullName.lowercase()
+    LaunchedEffect(key,s.username){model.ensureStarStatus(project.id)}
+    val busy=key in s.starBusy;val starred=s.starStates[key]
+    IconButton(onClick={model.toggleStar(project)},enabled=!busy,modifier=Modifier.size(48.dp)) {
+        if(busy)CircularProgressIndicator(Modifier.size(16.dp),color=Muted,strokeWidth=1.dp)
+        else Icon(if(starred==true)Icons.Outlined.Star else Icons.Outlined.StarBorder,
+            if(s.username.isBlank())"登录后添加 Star" else if(starred==true)"取消 Star" else "添加 Star",Modifier.size(20.dp),tint=if(starred==true)Ink else Muted)
+    }
+}
+private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)else stars.toString()
+
+@Composable private fun ColumnScope.DiscoveryPage(s:GroveState,model:GroveViewModel,listState:LazyListState,categoryScroll:ScrollState) {
+    LoadOnScrollEnd(listState,s.discoverPage,s.moreDiscoveries&&!s.loading&&s.error==null){model.discover(more=true)}
+    var languages by remember {mutableStateOf(false)}
+    val pullState=rememberPullToRefreshState()
+    CompactHeader("发现") {
+        IconButton(onClick=model::refreshDiscoveries,enabled=!s.loading){Icon(Icons.Outlined.Refresh,"刷新发现",Modifier.size(19.dp))}
+    }
+    HorizontalDivider(color=Rule)
+    Row(Modifier.fillMaxWidth().horizontalScroll(categoryScroll).padding(horizontal=20.dp,vertical=6.dp),horizontalArrangement=Arrangement.spacedBy(7.dp)) {
+        Category.entries.forEach {category->FilterChip(selected=s.category==category,onClick={model.discoveryFilter(category=category)},label={Text(category.label,fontSize=10.sp)},shape=androidx.compose.foundation.shape.RoundedCornerShape(2.dp))}
+    }
+    HorizontalDivider(color=Rule)
+    Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),verticalAlignment=Alignment.CenterVertically) {
+        TextButton(onClick={model.discoveryFilter(newProjects=false)}){Text("高星精选",fontSize=11.sp,fontWeight=if(!s.newProjects)FontWeight.Bold else FontWeight.Normal,color=if(!s.newProjects)Ink else Muted)}
+        TextButton(onClick={model.discoveryFilter(newProjects=true)}){Text("新晋热门",fontSize=11.sp,fontWeight=if(s.newProjects)FontWeight.Bold else FontWeight.Normal,color=if(s.newProjects)Ink else Muted)}
+        Spacer(Modifier.weight(1f))
+        Box {TextButton(onClick={languages=true}){Text(s.language.ifBlank{"全部语言"},fontSize=10.sp);Icon(Icons.Outlined.ExpandMore,null,Modifier.size(13.dp))}
+            DropdownMenu(expanded=languages,onDismissRequest={languages=false}) {listOf("","Kotlin","Java","TypeScript","Python","Rust","Go").forEach {language->DropdownMenuItem(text={Text(language.ifBlank{"全部语言"},fontSize=12.sp)},onClick={languages=false;model.discoveryFilter(language=language)})}}
+        }
+    }
+    HorizontalDivider(color=Rule)
+    Text(if(s.newProjects)"近 30 天创建 · 按累计 Star 排序" else "${s.category.label}领域 · 按累计 Star 排序",Modifier.padding(horizontal=22.dp,vertical=11.dp),fontSize=9.sp,color=Muted)
+    if(s.loading&&!s.discoverRefreshing)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp),color=Muted,trackColor=Rule)
+    s.error?.let {ErrorNotice(it,model::retry)}
+    PullToRefreshBox(isRefreshing=s.discoverRefreshing,onRefresh={if(!s.loading)model.refreshDiscoveries()},state=pullState,
+        modifier=Modifier.weight(1f).fillMaxWidth(),indicator={
+            Indicator(modifier=Modifier.align(Alignment.TopCenter),isRefreshing=s.discoverRefreshing,state=pullState,containerColor=Paper,color=Ink)
+        }) {
+        LazyColumn(Modifier.fillMaxSize(),state=listState,contentPadding=PaddingValues(horizontal=22.dp)) {
+            if(s.discoveries.isEmpty()&&!s.loading&&s.error==null)item {EmptyNotice("暂时没有找到项目。","换一个分类或语言试试。",Icons.Outlined.Explore)}
+            items(s.discoveries,key={it.id.fullName}) {p->ProjectRow(p,onClick={model.openRepository(p.id)},index=s.discoveries.indexOf(p)+1,starAction={RepositoryStar(p,s,model)})}
+            if(s.moreDiscoveries)item {PageLoading(s.loading)}
+        }
+    }
+}
+
+@Composable private fun ColumnScope.SavedPage(s:GroveState,model:GroveViewModel) {
+    val starTab=!s.savedBookmarks
+    val starQuery=s.starSearchQuery
+    var bookmarkQuery by rememberSaveable(s.username){mutableStateOf("")}
+    val query=if(starTab)starQuery else bookmarkQuery
+    val searching=starQuery.isNotBlank()
+    val stars=if(searching)s.starSearchResults else s.stars
+    val bookmarks=remember(s.bookmarks,bookmarkQuery){s.bookmarks.filter{(it.repo.fullName+" "+it.path+" "+it.ref).contains(bookmarkQuery.trim(),true)}}
+    val listState=key(starTab,s.username){rememberLazyListState()}
+    LaunchedEffect(query,starTab){listState.scrollToItem(0)}
+    val pullState=rememberPullToRefreshState()
+    LoadOnScrollEnd(listState,s.starPage,starTab&&!searching&&s.username.isNotBlank()&&s.moreStars&&!s.loading&&!s.starSearchBusy&&s.error==null){model.loadStars(true)}
+    CompactHeader("收藏") {
+        if(!starTab||s.username.isNotBlank())IconButton(onClick=model::refreshSaved,enabled=!s.starSearchBusy&&!s.loading){Icon(Icons.Outlined.Refresh,"刷新收藏",Modifier.size(19.dp))}
+    }
+    Row(Modifier.padding(horizontal=15.dp)) {TextButton(onClick={model.selectSavedTab(false)},modifier=Modifier.semantics{selected=starTab}){Text("仓库 Star",fontSize=12.sp,fontWeight=if(starTab)FontWeight.Bold else FontWeight.Normal)}
+        TextButton(onClick={model.selectSavedTab(true)},modifier=Modifier.semantics{selected=!starTab}){Text("文档书签 ${s.bookmarks.size}",fontSize=12.sp,fontWeight=if(!starTab)FontWeight.Bold else FontWeight.Normal)}}
+    HorizontalDivider(color=Rule)
+    OutlinedTextField(value=query,onValueChange={if(starTab)model.searchStars(it) else bookmarkQuery=it},
+        modifier=Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=10.dp),singleLine=true,
+        placeholder={Text(if(starTab)"搜索仓库名、作者或简介"else"搜索文件名、路径或仓库",fontSize=12.sp)},
+        leadingIcon={Icon(Icons.Outlined.Search,null,Modifier.size(18.dp))},
+        trailingIcon={if(query.isNotEmpty())IconButton(onClick={if(starTab)model.searchStars("")else bookmarkQuery=""}){Icon(Icons.Outlined.Close,"清除收藏搜索",Modifier.size(17.dp))}})
+    if(starTab&&s.username.isNotBlank()) {
+        if((s.loading||s.starSearchBusy)&&!s.savedRefreshing)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp),color=Muted)
+        if(!searching)s.error?.let {ErrorNotice(it,model::retry)}
+        if(searching)s.starSearchError?.let{ErrorNotice(it){model.searchStars(starQuery,refresh=true)}}
+        val summary=when {
+            searching&&s.starSearchBusy -> "正在搜索全部 Star · 已检查 ${s.starSearchScanned} 个"
+            searching&&s.starSearchComplete -> "找到 ${stars.size} 个仓库 · 已搜索全部 ${s.starSearchScanned} 个 Star"
+            searching -> "搜索尚未完成 · 已检查 ${s.starSearchScanned} 个 Star"
+            else -> "${stars.size} 个仓库"+if(s.moreStars)" · 上拉继续加载"else""
+        }
+        Text(summary,Modifier.padding(horizontal=22.dp,vertical=5.dp),fontSize=9.sp,color=Muted)
+    }
+    PullToRefreshBox(isRefreshing=s.savedRefreshing,onRefresh=model::refreshSaved,state=pullState,
+        modifier=Modifier.weight(1f).fillMaxWidth(),indicator={
+            Indicator(modifier=Modifier.align(Alignment.TopCenter),isRefreshing=s.savedRefreshing,state=pullState,containerColor=Paper,color=Ink)
+        }) {
+    if(starTab) {
+        if(s.username.isBlank()) {Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),horizontalAlignment=Alignment.CenterHorizontally){
+            EmptyNotice("你的 Star，也是一份书单。","登录 GitHub 后查看收藏的仓库。\n文档书签可以直接在本机使用。",Icons.Outlined.StarBorder)
+            Button(onClick=model::login,enabled=!s.authBusy){Text(if(s.authBusy)"正在授权…"else"登录 GitHub")}}}
+        else {
+            LazyColumn(Modifier.fillMaxSize(),state=listState,contentPadding=PaddingValues(horizontal=22.dp)) {
+                if(stars.isEmpty()&&!s.loading&&!s.starSearchBusy&&s.error==null&&(!searching||s.starSearchComplete))item{EmptyNotice(if(!searching)"还没有 Star 的仓库。"else"没有匹配的仓库。",if(!searching)"去发现页寻找喜欢的项目。"else"试试其他仓库名、作者或简介关键词。",Icons.Outlined.StarBorder)}
+                items(stars,key={it.id.fullName}){p->ProjectRow(p,onClick={model.openRepository(p.id)},starAction={RepositoryStar(p,s,model)})}
+                if(!searching&&s.moreStars)item {PageLoading(s.loading)}
+            }
+        }
+    }else LazyColumn(Modifier.fillMaxSize(),state=listState,contentPadding=PaddingValues(horizontal=22.dp)) {
+        if(bookmarks.isEmpty())item {EmptyNotice(if(query.isBlank())"留一枚书签。"else"没有匹配的书签。",if(query.isBlank())"阅读时点击书签，就能把这一页留在这里。"else"试试文件名、路径或仓库名。",Icons.Outlined.BookmarkBorder)}
+        items(bookmarks,key={it.key}){bookmark->Column(Modifier.fillMaxWidth().clickable {model.openBookmark(bookmark)}.padding(vertical=20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment=Alignment.CenterVertically){Icon(Icons.Outlined.BookmarkBorder,null,Modifier.size(17.dp),tint=Muted);Spacer(Modifier.width(10.dp));Text(bookmark.path.substringAfterLast('/'),fontSize=13.sp,fontFamily=FontFamily.Monospace,maxLines=1,overflow=TextOverflow.Ellipsis)}
+            Text("${bookmark.repo.fullName} · ${bookmark.ref}",fontSize=10.sp,color=Muted)
+            HorizontalDivider(Modifier.padding(top=10.dp),color=Rule)
+        }}
+    }
+    }
+}
+
+@Composable private fun ColumnScope.ProfilePage(s:GroveState,model:GroveViewModel,settings:()->Unit,about:()->Unit,projects:()->Unit,addedRepos:()->Unit) {
+    val context=LocalContext.current
+    var more by remember {mutableStateOf(false)}
+    CompactHeader("我的") {
+        Box {
+            IconButton(onClick={more=true}){Icon(Icons.Outlined.MoreHoriz,"更多功能",Modifier.size(22.dp))}
+            DropdownMenu(expanded=more,onDismissRequest={more=false}) {
+                DropdownMenuItem(text={Text("阅读偏好")},leadingIcon={Icon(Icons.Outlined.TextFields,null)},onClick={more=false;settings()})
+                DropdownMenuItem(text={Text("已添加的仓库")},leadingIcon={Icon(Icons.Outlined.FolderOpen,null)},onClick={more=false;addedRepos()})
+                if(s.username.isNotBlank()&&BuildConfig.GITHUB_APP_SLUG.isNotBlank())DropdownMenuItem(text={Text("仓库授权")},leadingIcon={Icon(Icons.Outlined.Lock,null)},onClick={
+                    more=false;contextOpen(context,"https://github.com/apps/${BuildConfig.GITHUB_APP_SLUG}/installations/new")
+                })
+                DropdownMenuItem(text={Text("关于 Grove")},leadingIcon={Icon(Icons.Outlined.Info,null)},onClick={more=false;about()})
+                if(s.username.isNotBlank()) {
+                    HorizontalDivider(color=Rule)
+                    DropdownMenuItem(text={Text("退出登录")},leadingIcon={Icon(Icons.AutoMirrored.Outlined.Logout,null)},onClick={more=false;model.logout()})
+                }
+            }
+        }
+    }
+    HorizontalDivider(color=Rule)
+    Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal=24.dp)) {
+        Row(Modifier.fillMaxWidth().padding(vertical=23.dp),verticalAlignment=Alignment.CenterVertically) {
+            Box(Modifier.size(48.dp).border(1.dp,Rule,androidx.compose.foundation.shape.CircleShape),contentAlignment=Alignment.Center) {
+                Icon(Icons.Outlined.PersonOutline,null,Modifier.size(25.dp),tint=Muted)
+            }
+            Column(Modifier.weight(1f).padding(horizontal=14.dp),verticalArrangement=Arrangement.spacedBy(5.dp)) {
+                Text(s.username.ifBlank{"访客"},fontSize=23.sp,fontFamily=FontFamily.Serif,maxLines=1,overflow=TextOverflow.Ellipsis)
+                Text(if(s.username.isBlank())"公开仓库可直接阅读"else"已连接 GitHub",fontSize=10.sp,color=Muted)
+            }
+            if(s.username.isBlank())TextButton(onClick=model::login,enabled=!s.authBusy){Text(if(s.authBusy)"授权中…"else"登录 GitHub",fontSize=11.sp)}
+        }
+        HorizontalDivider(color=Rule)
+        PreferenceRow(Icons.Outlined.FolderOpen,"我的项目",if(s.username.isBlank())"登录后查看你的公开与私有仓库"else"查看我的公开与私有仓库",projects)
+        PreferenceRow(Icons.Outlined.StarBorder,"GitHub Star","查看和管理已 Star 的仓库"){model.openSaved(false)}
+        PreferenceRow(Icons.Outlined.BookmarkBorder,"文档书签","${s.bookmarks.size} 枚书签，随时回到保存的页面"){model.openSaved(true)}
+        Text("继续阅读",Modifier.padding(top=26.dp,bottom=13.dp),fontSize=11.sp,color=Muted)
+        val resume=s.resume
+        if(resume==null) {
+            Text("打开一份文档后，在这里接着读。",Modifier.padding(bottom=26.dp),fontSize=12.sp,lineHeight=21.sp,color=Muted)
+        }else {
+            Row(Modifier.fillMaxWidth().clickable(onClick=model::resumeReading).padding(vertical=8.dp),verticalAlignment=Alignment.CenterVertically) {
+                BookCover(resume.repo,Modifier.size(50.dp,73.dp),small=true)
+                Column(Modifier.weight(1f).padding(horizontal=15.dp),verticalArrangement=Arrangement.spacedBy(7.dp)) {
+                    Text(resume.path.substringAfterLast('/'),fontFamily=FontFamily.Monospace,fontSize=13.sp,maxLines=2,overflow=TextOverflow.Ellipsis)
+                    Text(resume.repo.fullName,fontSize=10.sp,color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis)
+                    Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                        LinearProgressIndicator(progress={resume.progress},modifier=Modifier.weight(1f).height(2.dp),color=Muted,trackColor=Rule)
+                        Text("${(resume.progress*100).toInt()}%",fontSize=9.sp,color=Muted)
+                    }
+                }
+                Icon(Icons.AutoMirrored.Outlined.ArrowForward,"继续阅读文档",Modifier.size(18.dp),tint=Muted)
+            }
+        }
+        Text("阅读位置和文档书签保存在本机",Modifier.padding(top=26.dp,bottom=24.dp),fontSize=9.sp,color=Muted)
+    }
+}
+@Composable private fun PreferenceRow(icon:ImageVector,title:String,description:String,click:()->Unit) {
+    Column {Row(Modifier.fillMaxWidth().clickable(onClick=click).padding(vertical=20.dp),verticalAlignment=Alignment.CenterVertically) {
+        Icon(icon,null,Modifier.size(19.dp),tint=Muted);Column(Modifier.weight(1f).padding(horizontal=14.dp),verticalArrangement=Arrangement.spacedBy(7.dp)){Text(title,fontSize=13.sp);Text(description,fontSize=10.sp,color=Muted)}
+        Icon(Icons.Outlined.ChevronRight,null,Modifier.size(14.dp),tint=Muted)
+    };HorizontalDivider(color=Rule)}
+}
+
+@Composable private fun ColumnScope.ReaderPage(s:GroveState,model:GroveViewModel,settings:()->Unit,toc:()->Unit,files:()->Unit,onLink:(String)->Unit,jump:String?) {
+    val doc=s.document
+    if(doc==null) {if(!s.loading)EmptyNotice("打开一页，开始阅读。","可以先浏览文件，或重试加载 README。");return}
+    val context=LocalContext.current
+    val sourceVertical=rememberSaveable(doc.key,saver=ScrollState.Saver){ScrollState(0)}
+    val sourceHorizontal=rememberSaveable(doc.key,saver=ScrollState.Saver){ScrollState(0)}
+    Row(Modifier.fillMaxWidth().padding(start=if(s.immersive)4.dp else 20.dp,end=7.dp),verticalAlignment=Alignment.CenterVertically) {
+        if(s.immersive)IconButton(onClick=model::toggleImmersive){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"退出专注阅读",Modifier.size(18.dp))}
+        Text(doc.path.substringAfterLast('/'),Modifier.weight(1f),fontFamily=FontFamily.Monospace,fontSize=10.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
+        if(doc.svg) {
+            TextButton(onClick={if(s.raw)model.toggleRaw()},modifier=Modifier.semantics{selected=!s.raw},contentPadding=PaddingValues(horizontal=8.dp)){
+                Text("预览",fontSize=10.sp,color=if(!s.raw)Ink else Muted,fontWeight=if(!s.raw)FontWeight.Bold else FontWeight.Normal)
+            }
+            TextButton(onClick={if(!s.raw)model.toggleRaw()},modifier=Modifier.semantics{selected=s.raw},contentPadding=PaddingValues(horizontal=8.dp)){
+                Text("源码",fontSize=10.sp,color=if(s.raw)Ink else Muted,fontWeight=if(s.raw)FontWeight.Bold else FontWeight.Normal)
+            }
+        }else if(doc.markdown)TextButton(onClick=model::toggleRaw){Text(if(s.raw)"阅读" else "源码",fontSize=10.sp)}
+        if(!s.immersive)IconButton(onClick=model::toggleImmersive,modifier=Modifier.size(36.dp)){Icon(Icons.Outlined.Fullscreen,"专注阅读",Modifier.size(18.dp))}
+        IconButton(onClick=model::toggleBookmark,enabled=doc.originUrl==null,modifier=Modifier.size(36.dp)){Icon(if(s.bookmarks.any{it.key==doc.key})Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,"收藏文档",Modifier.size(18.dp))}
+    }
+    HorizontalDivider(Modifier.padding(horizontal=20.dp),color=Rule)
+    if(doc.attachment?.kind==PreviewKind.PDF)PdfPreview(java.io.File(doc.attachment.localPath),Modifier.weight(1f).fillMaxWidth())
+    else if(s.raw&&doc.sourceTooLarge)Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp)) {
+        Text("SVG 源码超过 1 MB，请返回预览，长按保存原文件后查看。",fontSize=12.sp,color=Muted,lineHeight=22.sp)
+    }
+    else if(s.raw||(!doc.markdown&&doc.attachment==null))SelectionContainer(Modifier.weight(1f).fillMaxWidth().verticalScroll(sourceVertical).horizontalScroll(sourceHorizontal).padding(20.dp)) {
+        Text(doc.content,fontSize=12.sp,lineHeight=21.sp,fontFamily=FontFamily.Monospace)
+    } else DocumentReader(doc,s.fontSize,s.warm,s.progress,onLink,model::progress,model::setHeadings,jump,Modifier.weight(1f).fillMaxWidth(),onImage=model::previewImage,imageResource=model::imageResource,onImageLongPress=model::showImageActions)
+    HorizontalDivider(color=Rule)
+    Row(Modifier.fillMaxWidth().padding(horizontal=12.dp),verticalAlignment=Alignment.CenterVertically) {
+        TextButton(onClick=files){Icon(Icons.Outlined.AccountTree,null,Modifier.size(14.dp));Text(" 文件",fontSize=10.sp)}
+        TextButton(onClick=toc,enabled=!s.raw&&doc.markdown){Icon(Icons.AutoMirrored.Outlined.List,null,Modifier.size(14.dp));Text(" 目录",fontSize=10.sp)}
+        Spacer(Modifier.weight(1f));Text("${(s.progress*100).toInt()}%",fontSize=9.sp,color=Muted)
+        if(doc.svg&&s.raw) {
+            IconButton(onClick={
+                (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(doc.path,doc.content))
+                Toast.makeText(context,"SVG 源码已复制",Toast.LENGTH_SHORT).show()
+            },enabled=!doc.sourceTooLarge){Icon(Icons.Outlined.ContentCopy,"复制 SVG 源码",Modifier.size(18.dp))}
+            Text("SVG 源码",fontSize=9.sp,color=Muted)
+        }else if(doc.attachment==null)IconButton(onClick=settings){Icon(Icons.Outlined.TextFields,"阅读设置",Modifier.size(18.dp))}
+        else Text(if(doc.attachment.kind==PreviewKind.SPREADSHEET)"只读表格"else if(doc.attachment.kind==PreviewKind.IMAGE)"双指缩放"else"PDF",fontSize=9.sp,color=Muted)
+    }
+}
+
+@Composable private fun ColumnScope.FilesPage(s:GroveState,model:GroveViewModel) {
+    var query by remember(s.directory){mutableStateOf("")}
+    Row(Modifier.fillMaxWidth().padding(horizontal=14.dp),verticalAlignment=Alignment.CenterVertically) {
+        if(s.directory.isNotBlank())IconButton(onClick={model.loadDirectory(s.directory.substringBeforeLast('/',""))}){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"上一级",Modifier.size(16.dp))}
+        Text(s.directory.ifBlank{"/"},Modifier.weight(1f).padding(vertical=12.dp),fontSize=11.sp,color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis)
+    }
+    OutlinedTextField(query,{query=it},Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=5.dp),placeholder={Text("筛选当前目录",fontSize=12.sp)},singleLine=true,leadingIcon={Icon(Icons.Outlined.Search,null,Modifier.size(17.dp))})
+    LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(horizontal=20.dp,vertical=9.dp)) {
+        items(s.files.filter{it.name.contains(query,true)},key={it.path}){f->Row(Modifier.fillMaxWidth().clickable {if(f.folder)model.loadDirectory(f.path)else model.openFile(f.path)}.padding(vertical=14.dp),verticalAlignment=Alignment.CenterVertically) {
+            Icon(if(f.folder)Icons.Outlined.Folder else if(f.name.endsWith(".pdf",true))Icons.Outlined.PictureAsPdf else if(f.name.substringAfterLast('.').lowercase() in listOf("png","jpg","jpeg","svg","gif","webp"))Icons.Outlined.Image else if(f.name.substringAfterLast('.').lowercase() in listOf("xlsx","xls","csv","tsv"))Icons.Outlined.TableChart else if(f.markdown)Icons.AutoMirrored.Outlined.MenuBook else Icons.Outlined.Description,null,Modifier.size(18.dp),tint=Muted)
+            Text(f.name,Modifier.weight(1f).padding(horizontal=12.dp),fontSize=12.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
+            if(!f.folder)Text(if(f.size>1024)"${f.size/1024} KB"else"${f.size} B",fontSize=9.sp,color=Muted)
+        }}
+        if(s.files.size>=1000)item{Text("此目录可能超过 GitHub Contents API 的显示上限。",Modifier.padding(15.dp),fontSize=11.sp,color=Muted)}
+        if(s.files.isEmpty()&&!s.loading&&s.error==null)item{EmptyNotice("这个目录是空的。","可以返回上一级继续浏览。",Icons.Outlined.Folder)}
+    }
+}
+
+@Composable private fun ColumnScope.IssuesPage(s:GroveState,model:GroveViewModel,onLink:(String)->Unit) {
+    val issue=s.issue
+    if(issue!=null) {
+        Row(Modifier.fillMaxWidth().padding(horizontal=15.dp),verticalAlignment=Alignment.CenterVertically) {TextButton(onClick=model::back){Icon(Icons.Outlined.ChevronLeft,null,Modifier.size(14.dp));Text("Issues",fontSize=10.sp)};Spacer(Modifier.weight(1f));Text("#${issue.number} · ${issue.state}",fontSize=10.sp,color=Muted)}
+        val body=remember(issue,s.comments) {buildString {
+            append("# ${issue.title}\n\n${issue.author} · ${issue.updated}\n\n${issue.body}\n\n---\n\n## 讨论 (${issue.comments})\n\n")
+            s.comments.forEach {append("### ${it.author}\n\n${it.created}\n\n${it.body}\n\n---\n\n")}
+        }}
+        val project=s.project ?: return
+        DocumentReader(Document(project.id,s.ref,"issue-${issue.number}.md",body),s.fontSize,s.warm,0f,onLink,{_,_->},{_,_->},null,Modifier.weight(1f).fillMaxWidth(),onImage=model::previewImage,imageResource=model::imageResource,onImageLongPress=model::showImageActions,
+            endPage=if(s.moreComments&&!s.loading&&s.error==null)s.commentPage else null,
+            onEnd={model.loadComments(true)})
+        if(s.moreComments)PageLoading(s.loading)
+        return
+    }
+    val listState=key(s.project?.id,s.closed){rememberLazyListState()}
+    LoadOnScrollEnd(listState,s.issuePage,s.moreIssues&&!s.loading&&s.error==null){model.loadIssues(more=true)}
+    Row(Modifier.padding(horizontal=16.dp)) {TextButton(onClick={model.loadIssues(false)}){Text("Open",fontSize=12.sp,fontWeight=if(!s.closed)FontWeight.Bold else FontWeight.Normal)};TextButton(onClick={model.loadIssues(true)}){Text("Closed",fontSize=12.sp,fontWeight=if(s.closed)FontWeight.Bold else FontWeight.Normal)};Spacer(Modifier.weight(1f));Text("只读",Modifier.align(Alignment.CenterVertically),fontSize=9.sp,color=Muted)}
+    LazyColumn(Modifier.weight(1f),state=listState,contentPadding=PaddingValues(horizontal=22.dp)) {
+        if(s.issues.isEmpty()&&!s.moreIssues&&!s.loading&&s.error==null)item {EmptyNotice("还没有讨论。","这里展示仓库的 Issues 与评论。",Icons.Outlined.Adjust)}
+        items(s.issues,key={it.number}){item->Column(Modifier.fillMaxWidth().clickable {model.openIssue(item)}.padding(vertical=19.dp),verticalArrangement=Arrangement.spacedBy(9.dp)) {
+            Text(item.title,fontSize=14.sp,lineHeight=23.sp)
+            Text("#${item.number} · ${item.author} · ${item.updated} · ${item.comments} 条评论",fontSize=10.sp,color=Muted)
+            if(item.labels.isNotEmpty())Text(item.labels.take(3).joinToString("  /  "),fontSize=9.sp,color=Muted)
+            HorizontalDivider(Modifier.padding(top=8.dp),color=Rule)
+        }}
+        if(s.moreIssues)item{PageLoading(s.loading)}
+    }
+}
+
+@Composable internal fun LoadOnScrollEnd(state:LazyListState,page:Int,enabled:Boolean,onLoad:()->Unit) {
+    val load by rememberUpdatedState(onLoad)
+    LaunchedEffect(state,page,enabled) {
+        if(enabled)snapshotFlow {
+            val layout=state.layoutInfo
+            layout.totalItemsCount>0&&(layout.visibleItemsInfo.lastOrNull()?.index?:-1)>=layout.totalItemsCount-3
+        }.collect {nearEnd->if(nearEnd)load()}
+    }
+}
+@Composable private fun PageLoading(loading:Boolean) {
+    Row(Modifier.fillMaxWidth().padding(16.dp),horizontalArrangement=Arrangement.Center,verticalAlignment=Alignment.CenterVertically) {
+        if(loading){CircularProgressIndicator(Modifier.size(13.dp),color=Muted,strokeWidth=1.dp);Spacer(Modifier.width(9.dp))}
+        Text(if(loading)"正在加载…"else"上拉继续加载",fontSize=10.sp,color=Muted)
+    }
+}
+@Composable private fun AddRepositoryDialog(dismiss:()->Unit,add:(String)->Boolean,importRepos:()->Unit) {
+    var input by remember {mutableStateOf("")};var invalid by remember {mutableStateOf(false)}
+    AlertDialog(onDismissRequest=dismiss,title={Text("添加仓库",fontFamily=FontFamily.Serif)},text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
+        Text("输入仓库名称或 GitHub 链接。",fontSize=12.sp,color=Muted)
+        TextButton(onClick=importRepos){Text("从我的 GitHub 仓库导入",fontSize=12.sp)}
+        OutlinedTextField(input,{input=it;invalid=false},singleLine=true,placeholder={Text("owner/repository",fontSize=12.sp)},isError=invalid)
+        if(invalid)Text("请输入有效的 owner/repository 或仓库主页链接。",fontSize=11.sp,color=MaterialTheme.colorScheme.error)
+    }},confirmButton={TextButton(onClick={if(add(input))dismiss()else invalid=true}){Text("添加")}},dismissButton={TextButton(onClick=dismiss){Text("取消")}})
+}
+
+private fun contextOpen(context:android.content.Context,url:String) {
+    try{context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(url)))}catch(_:ActivityNotFoundException){}
+}

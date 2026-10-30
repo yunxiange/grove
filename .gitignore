@@ -1,0 +1,16 @@
+.gradle/
+.kotlin/
+.idea/
+.vscode/
+.DS_Store
+**/build/
+local.properties
+*.jks
+*.keystore
+reader/node_modules/
+captures/
+artifacts/
+.env
+.env.*
+*.pem
+*.key

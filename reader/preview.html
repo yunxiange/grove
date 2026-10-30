@@ -1,0 +1,15 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Grove 阅读器验证</title><style>*{box-sizing:border-box}body{margin:0;background:#eae7df;font:13px sans-serif;color:#302e28}header{max-width:900px;margin:20px auto;padding:0 20px;display:flex;align-items:center;justify-content:space-between}h1{font:21px Georgia,serif;margin:0}small{color:#706c63;font-size:10px}iframe{display:block;margin:18px auto;width:390px;max-width:100%;height:560px;border:1px solid #d1c8b8;background:#f9f7f1}button{background:#302e28;color:#f9f7f1;padding:9px 14px;border:0;cursor:pointer}</style></head>
+<body><header><div><h1>Grove / Reader verification</h1><small>实际打包的阅读引擎 · 浏览器验证，不是 Android 界面截图</small></div><div><button id="document">文档</button> <button id="image">图片</button> <button id="excel">Excel</button> <button id="features">流程图</button></div></header><iframe title="实际文档阅读器" src="../app/src/main/assets/reader/index.html"></iframe><header><small id="status">加载阅读引擎…</small></header><script>
+const frame=document.querySelector('iframe');
+const sample='# 把知识写下来。\n让它流动。\n\n这份文档使用 APK 内的同一套 Markdown 阅读引擎。\n\n## 排版与代码\n\n| 格式 | 支持 |\n| --- | --- |\n| 表格 | 横向滚动 |\n| 公式 | KaTeX |\n\n```kotlin\nval reading = "A quieter way to explore"\n```\n\n- [x] 表格与任务列表\n- [x] 公式与流程图\n\n## 流程图\n\n```mermaid\nflowchart LR\n A[Markdown] --> B[Git]\n B --> C[Read]\n```\n\n## 数学公式\n\n$$E=mc^2$$\n\n## 混排\n\n<details><summary>展开一条笔记</summary>保留原生 HTML 的实用排版，同时移除脚本与表单。</details>\n\n[相对文档链接](docs/guide.md)';
+frame.onload=()=>{
+ const reader=frame.contentWindow;
+ reader.Grove={headings(id,json){document.querySelector('#status').textContent='目录已生成：'+JSON.parse(json).length+' 个章节'},progress(){},copyCode(){},openLink(url){document.querySelector('#status').textContent=url}};
+ reader.renderDocument({id:'verification',content:sample,url:'https://raw.githubusercontent.com/northstar/papertrail/main/README.md',fontSize:17,warm:false,progress:0});
+};
+document.querySelector('#document').onclick=()=>frame.contentWindow.renderDocument({id:'verification',content:sample,url:'https://raw.githubusercontent.com/northstar/papertrail/main/README.md',fontSize:17,warm:false,progress:0});
+document.querySelector('#image').onclick=()=>frame.contentWindow.renderDocument({id:'image-verification',content:'',kind:'image',attachmentUrl:new URL('./fixtures/grove-preview.svg',location.href).href,fontSize:17,warm:false,progress:0});
+document.querySelector('#excel').onclick=()=>frame.contentWindow.renderDocument({id:'excel-verification',content:'',kind:'spreadsheet',attachmentUrl:new URL('./fixtures/workbook.xlsx',location.href).href,fontSize:17,warm:false,progress:0});
+document.querySelector('#features').onclick=()=>frame.contentWindow.scrollToHeading('流程图');
+</script></body></html>

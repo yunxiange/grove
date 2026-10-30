@@ -1,0 +1,26 @@
+{
+  "name": "grove-reader-assets",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "type": "module",
+  "dependencies": {
+    "dompurify": "3.4.17",
+    "esbuild": "0.25.5",
+    "highlight.js": "11.11.1",
+    "katex": "0.19.1",
+    "markdown-it": "14.1.0",
+    "markdown-it-task-lists": "2.1.1",
+    "markdown-it-texmath": "1.0.0",
+    "mermaid": "12.2.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

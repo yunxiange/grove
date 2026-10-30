@@ -1,0 +1,3 @@
+# Bundled offline reader assets are generated from reader/src/.
+app/src/main/assets/reader/** linguist-generated=true
+reader/package-lock.json linguist-generated=true
