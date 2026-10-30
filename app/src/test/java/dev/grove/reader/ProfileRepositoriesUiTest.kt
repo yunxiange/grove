@@ -47,6 +47,7 @@ class ProfileRepositoriesUiTest {
             val params=url.query.orEmpty().split('&').associate{it.substringBefore('=') to it.substringAfter('=')}
             val name=url.path.substringAfterLast('/')
             val body=when {
+                url.path=="/search/repositories" -> JSONObject().put("items",JSONArray(listOf(project("paper-notes",4200),project("android-reader",3100),project("open-library",1800)))).toString()
                 url.path=="/user/repos" -> JSONArray(listOf(project("alpha",10),project("beta",100),project("gamma",50))).toString()
                 url.path=="/user/starred" -> {
                     val count=params["per_page"]?.toInt()?:30;val page=params["page"]?.toInt()?:1
@@ -143,5 +144,14 @@ class ProfileRepositoriesUiTest {
         assertEquals(205,model.state.value.starSearchScanned)
         assertTrue(model.state.value.starSearchComplete)
         snapshot("favorites-search")
+    }
+    @Test fun discoveryShowsCategoriesSortModesAndProjectResults() {
+        compose.runOnIdle{model.navigate(Destination.DISCOVER)};awaitLoad()
+        compose.onNodeWithText("高星精选").assertIsDisplayed()
+        compose.onNodeWithText("新晋热门").assertIsDisplayed()
+        compose.onNodeWithText("全部语言").assertIsDisplayed()
+        compose.onNodeWithText("paper-notes").assertIsDisplayed()
+        compose.onNodeWithText("android-reader").assertIsDisplayed()
+        snapshot("discovery")
     }
 }

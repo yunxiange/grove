@@ -5,7 +5,7 @@
 **Android 8.0+ · Kotlin + Jetpack Compose · 开发版 0.3.2**
 
 <p align="center">
-  <img src="docs/screenshots/overview.png" width="900" alt="Grove 产品界面：收藏搜索、最近访问和个人页，三张实际页面叠放展示">
+  <img src="docs/screenshots/overview.png" width="900" alt="Grove 产品界面：收藏搜索、最近访问、发现和个人页，四张实际页面叠放展示">
 </p>
 
 <sub>实际 Compose 页面，使用示例数据在 Robolectric 原生图形模式下渲染；尚未完成真机验收。</sub>
