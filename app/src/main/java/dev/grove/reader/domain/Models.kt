@@ -29,8 +29,14 @@ data class RepoFile(val path: String, val folder: Boolean, val size: Long = 0) {
     val name get() = path.substringAfterLast('/')
     val markdown get() = name.endsWith(".md", true) || name.endsWith(".markdown", true)
 }
-enum class PreviewKind { IMAGE, PDF, SPREADSHEET }
+enum class PreviewKind { IMAGE, PDF, SPREADSHEET, EPUB }
 data class Attachment(val kind: PreviewKind, val mimeType: String, val localPath: String)
+data class FileDownloadProgress(val downloadedBytes:Long,val totalBytes:Long?,val kind:PreviewKind=PreviewKind.EPUB) {
+    val fraction:Float? get()=totalBytes?.takeIf{it>0&&downloadedBytes<=it}?.let{(downloadedBytes.toDouble()/it).toFloat().coerceIn(0f,1f)}
+}
+data class DocumentTarget(val repo:RepoId,val ref:String,val path:String) {
+    val key get()="${repo.fullName}:$ref:$path"
+}
 data class ImageRequest(val document:Document,val url:String)
 data class ImageDownload(val bytes:ByteArray,val mimeType:String,val fileName:String)
 data class ImageSavePrompt(val mimeType:String,val fileName:String)

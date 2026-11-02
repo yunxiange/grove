@@ -48,6 +48,7 @@ fun previewType(path: String, bytes: ByteArray): PreviewType? {
     }
     if(image!=null)return PreviewType(PreviewKind.IMAGE,image)
     if(prefix.startsWith("%PDF-"))return PreviewType(PreviewKind.PDF,"application/pdf")
+    if(extension=="epub" && signature(80,75))return PreviewType(PreviewKind.EPUB,"application/epub+zip")
     if(extension in listOf("xlsx","xlsm","xltx","xltm") && signature(80,75))return PreviewType(PreviewKind.SPREADSHEET,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     if(extension=="xls" && signature(208,207,17,224,161,177,26,225))return PreviewType(PreviewKind.SPREADSHEET,"application/vnd.ms-excel")
     if(extension in listOf("csv","tsv"))return PreviewType(PreviewKind.SPREADSHEET,if(extension=="csv")"text/csv" else "text/tab-separated-values")

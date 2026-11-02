@@ -5,6 +5,7 @@ import {JSDOM} from 'jsdom';
 import createDOMPurify from 'dompurify';
 import {createRenderer,normalizeLinks,sanitizeMarkdown,renderMath} from '../src/render.js';
 import {createEndObserver} from '../src/scroll.js';
+import {installChapterSwipe} from '../src/swipe.js';
 
 test('appending comments preserves absolute reading position and loading updates keep existing DOM',async()=>{
   const dom=new JSDOM('<article></article>',{runScripts:'outside-only',pretendToBeVisual:true});
@@ -13,7 +14,7 @@ test('appending comments preserves absolute reading position and loading updates
   Object.defineProperty(window,'innerHeight',{value:700});
   Object.defineProperty(window.document.documentElement,'scrollHeight',{get:()=>700+article.textContent.length*10});
   window.scrollTo=(first,next)=>{y=Math.max(0,Math.min(typeof first==='object'?first.top:next,window.document.documentElement.scrollHeight-700));};
-  Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,createEndObserver,DOMPurify:createDOMPurify(window)});
+  Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,createEndObserver,installChapterSwipe,DOMPurify:createDOMPurify(window)});
   const calls=[];window.Grove={headings(){},reachedEnd:(...args)=>calls.push(args)};
   const script=(await readFile(new URL('../src/main.js',import.meta.url),'utf8')).replace(/^import .*;$/gm,'');
   window.eval(script);

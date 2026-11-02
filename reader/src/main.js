@@ -1,12 +1,17 @@
 import DOMPurify from 'dompurify';
-import { createRenderer, normalizeLinks, sanitizeMarkdown, renderMath } from './render.js';
+import { createRenderer, normalizeLinks, sanitizeMarkdown, renderMath, renderEpub } from './render.js';
 import {createEndObserver} from './scroll.js';
+import {installChapterSwipe} from './swipe.js';
 const md=createRenderer();
 const article=document.querySelector('article');
 let active=null;
 let rendering=0;
 let scrollTimer;
 let contentReady=false;
+installChapterSwipe(document,{
+  getDocument:()=>contentReady&&active?.kind==='epub'&&active.swipePages?active:null,
+  onSwipe:(id,direction)=>window.Grove?.swipePage?.(id,direction)
+});
 const endObserver=createEndObserver(()=>({y:scrollY,height:innerHeight,total:document.documentElement.scrollHeight}),
   (id,page)=>window.Grove?.reachedEnd(id,page));
 const checkEnd=()=>{if(contentReady)endObserver.check();};
@@ -85,9 +90,18 @@ const renderDocument=async payload=>{
     }catch {if(generation!==rendering)return;article.textContent='无法读取工作簿，可能已加密、损坏或超过预览范围。';window.Grove?.renderFailed?.(payload.id);}
     window.Grove?.headings(payload.id,'[]');return;
   }
-  article.innerHTML=sanitizeMarkdown(md.render(payload.content),DOMPurify);
+  if(payload.kind==='epub')renderEpub(article,payload.content,payload.url,DOMPurify);
+  else article.innerHTML=sanitizeMarkdown(md.render(payload.content),DOMPurify);
+  // Keep the table's intrinsic column widths independent of the phone viewport.
+  // Constraining the table itself squeezes CJK cells down to a few characters.
+  for(const table of article.querySelectorAll('table')) {
+    const scroll=document.createElement('div');
+    scroll.className='table-scroll';scroll.tabIndex=0;
+    scroll.setAttribute('role','region');scroll.setAttribute('aria-label','表格');
+    table.before(scroll);scroll.append(table);
+  }
   renderMath(article);
-  const headings=normalizeLinks(article,payload.url);
+  const headings=payload.kind==='epub'?[]:normalizeLinks(article,payload.url);
   document.querySelectorAll('pre:not(.mermaid)').forEach(pre=>{
     const header=document.createElement('div');header.className='code-header';
     const language=pre.querySelector('code')?.className.replace('language-','')||'code';
@@ -108,11 +122,14 @@ const renderDocument=async payload=>{
   if(generation!==rendering)return;
   window.Grove?.headings(payload.id,JSON.stringify(headings));
   finishRender(payload,generation,()=>isNew?(document.documentElement.scrollHeight-innerHeight)*payload.progress:oldY);
+  if(payload.kind==='epub'&&isNew&&new URL(payload.url).hash)requestAnimationFrame(()=>{
+    document.getElementById(decodeURIComponent(new URL(payload.url).hash.slice(1)))?.scrollIntoView();
+  });
 };
 window.scrollToHeading=id=>document.getElementById(id)?.scrollIntoView({behavior:'smooth',block:'start'});
 document.addEventListener('click',event=>{
   const image=event.target.closest('article img:not(.preview-image)');
-  if(image){event.preventDefault();window.Grove?.openImage(image.currentSrc||image.src);return;}
+  if(image){event.preventDefault();if(active?.kind!=='epub')window.Grove?.openImage(image.currentSrc||image.src);return;}
   const anchor=event.target.closest('a');if(!anchor)return;
   event.preventDefault();
   const href=anchor.getAttribute('href');if(!href)return;

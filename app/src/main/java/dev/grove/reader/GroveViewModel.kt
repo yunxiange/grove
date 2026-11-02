@@ -45,7 +45,10 @@ data class GroveState(
     val authDevice: DeviceAuthorization? = null, val authBusy: Boolean = false, val authError: String? = null,
     val starStates: Map<String,Boolean> = emptyMap(), val starBusy: Set<String> = emptySet(), val starError: String? = null,
     val fontSize: Int = 17, val warm: Boolean = false, val loading: Boolean = false, val error: String? = null,
+    val downloadProgress:FileDownloadProgress?=null,
+    val openingDocument:DocumentTarget?=null,
     val previewDiagnosticsEnabled:Boolean=false,
+    val cacheBytes:Long?=null,val cacheBusy:Boolean=false,val cacheMessage:String?=null,
 )
 
 class GroveViewModel(application: Application) : AndroidViewModel(application) {
@@ -72,6 +75,8 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     private var imageJob:Job?=null
     private var pendingImage:ImageDownload?=null
     private val imageStore=ImageStore(application.contentResolver)
+    private val contentCache=ContentCache(application.cacheDir)
+    private var cacheJob:Job?=null
     private val starJobs = mutableMapOf<String,Job>()
     private var starRevision = 0L
     private var starSearchJob:Job?=null
@@ -83,6 +88,10 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     private val readingHistory = ArrayDeque<Document>()
     private data class TabSession(val screen:GroveState,val history:List<Document>,val retry:(suspend()->Unit)?,val pending:Boolean)
     private val tabSessions=mutableMapOf<Destination,TabSession>()
+    private class DocumentLoad(val target:DocumentTarget,val account:String,
+        var progress:FileDownloadProgress?=null,var busy:Boolean=true,var document:Document?=null,var error:String?=null,var job:Job?=null)
+    private val documentLoads=mutableMapOf<String,DocumentLoad>()
+    private fun cancelDocumentLoads(){documentLoads.values.forEach{it.job?.cancel()};documentLoads.clear()}
     init {
         mutable.update{it.copy(username=vault.login())}
         refreshLibrary()
@@ -97,6 +106,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     private fun switchAccount(profile:UserProfile?) {
+        cancelDocumentLoads()
         dismissFilePicker()
         resetStarIndex()
         imageJob?.cancel();pendingImage=null
@@ -110,17 +120,17 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         lastRequest = block
         requestJob?.cancel()
         requestJob = viewModelScope.launch {
-            mutable.update { it.copy(loading=true,error=null,discoverRefreshing=false,savedRefreshing=false) }
+            mutable.update { it.copy(loading=true,downloadProgress=null,error=null,discoverRefreshing=false,savedRefreshing=false) }
             try { block() }
             catch(e: CancellationException) { throw e }
             catch(e: Exception) {
                 if(e is GitHubException&&e.status==401){api.clearAccountFiles();vault.clear();switchAccount(null)}
                 mutable.update { it.copy(error=e.message ?: "内容加载失败，请重试。") }
             }
-            finally { if(currentCoroutineContext().isActive) mutable.update { it.copy(loading=false,discoverRefreshing=false,savedRefreshing=false) } }
+            finally { if(currentCoroutineContext().isActive) mutable.update { it.copy(loading=false,downloadProgress=null,discoverRefreshing=false,savedRefreshing=false) } }
         }
     }
-    fun retry() { lastRequest?.let { request(it) } }
+    fun retry() { mutable.value.openingDocument?.let{startDocument(it,retry=true)}?:lastRequest?.let { request(it) } }
     fun removeRepository(id: RepoId) {
         val library=mutable.value.library.filterNot { it.fullName.equals(id.fullName,true) }
         store.saveLibrary(library);mutable.update { it.copy(library=library) }
@@ -143,7 +153,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     fun selectSavedTab(bookmarks:Boolean) {
         if(mutable.value.savedBookmarks==bookmarks)return
         requestJob?.cancel()
-        mutable.update{it.copy(loading=false,error=null,savedRefreshing=false)}
+        mutable.update{it.copy(loading=false,downloadProgress=null,error=null,savedRefreshing=false)}
         mutable.update{it.copy(savedBookmarks=bookmarks)}
         if(bookmarks)pauseStarSearch()
         else if(mutable.value.starSearchQuery.isNotBlank())searchStars(mutable.value.starSearchQuery)
@@ -184,7 +194,8 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
             directory=saved.directory,files=saved.files,branches=saved.branches,
             issues=saved.issues,issue=saved.issue,closed=saved.closed,issuePage=saved.issuePage,moreIssues=saved.moreIssues,
             comments=saved.comments,commentPage=saved.commentPage,moreComments=saved.moreComments,issueProgress=saved.issueProgress,
-            filePicker=null,loading=false,error=saved.error,discoverRefreshing=false,savedRefreshing=false)}
+            filePicker=null,loading=false,downloadProgress=null,openingDocument=saved.openingDocument,error=saved.error,discoverRefreshing=false,savedRefreshing=false)}
+        saved.openingDocument?.let{target->documentLoads[target.key]?.let(::publishDocumentLoad)}
     }
     private fun returnToHome() {
         dismissFilePicker();flushProgress();requestJob?.cancel();readingHistory.clear();lastRequest=null
@@ -203,7 +214,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         pauseStarSearch()
         flushProgress();readingHistory.clear()
         mutable.update { it.copy(project=it.projects[id.fullName] ?: Project(id),ref="main",tab=RepoTab.READ,document=null,raw=false,
-            immersive=false,directory="",files=emptyList(),issues=emptyList(),issue=null,branches=emptyList(),progress=0f,headings=emptyList()) }
+            immersive=false,openingDocument=null,directory="",files=emptyList(),issues=emptyList(),issue=null,branches=emptyList(),progress=0f,headings=emptyList()) }
         request {
             val project=api.project(id)
             mutable.update { it.copy(project=project,ref=project.branch,projects=it.projects+(id.fullName to project)+(project.id.fullName to project)) }
@@ -214,14 +225,14 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     private fun display(document: Document) {
         rememberVisit(document.repo)
         val progress=store.progress(document.key)
-        mutable.update { it.copy(document=document,ref=document.ref,tab=RepoTab.READ,raw=false,progress=progress,headings=emptyList()) }
+        mutable.update { it.copy(document=document,openingDocument=null,downloadProgress=null,ref=document.ref,tab=RepoTab.READ,raw=false,progress=progress,headings=emptyList()) }
     }
     fun openBookmark(bookmark: Bookmark) {
         dismissFilePicker()
         flushProgress();readingHistory.clear()
         mutable.update { it.copy(project=it.projects[bookmark.repo.fullName] ?: Project(bookmark.repo),ref=bookmark.ref,
             document=null,tab=RepoTab.READ,immersive=false,issue=null,headings=emptyList()) }
-        request { display(api.document(bookmark.repo,bookmark.ref,bookmark.path)) }
+        startDocument(DocumentTarget(bookmark.repo,bookmark.ref,bookmark.path))
     }
     fun resumeReading() { mutable.value.resume?.let { openBookmark(it);mutable.update { s -> s.copy(immersive=true) } } }
     fun openFile(path: String) {
@@ -229,22 +240,91 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         val s=mutable.value;val project=s.project ?: return
         flushProgress();s.document?.let { readingHistory.addLast(it) }
         mutable.update { it.copy(document=null,tab=RepoTab.READ,headings=emptyList(),progress=0f) }
-        request { display(api.document(project.id,s.ref,path)) }
+        startDocument(DocumentTarget(project.id,s.ref,path))
+    }
+    private fun publishDocumentLoad(load:DocumentLoad) {
+        if(documentLoads[load.target.key]!==load||vault.accountId()!=load.account)return
+        val s=mutable.value
+        if(s.openingDocument?.key!=load.target.key||s.tab!=RepoTab.READ)return
+        val doc=load.document
+        if(doc!=null){mutable.update{it.copy(loading=false,error=null)};display(doc)}
+        else mutable.update{it.copy(loading=load.busy,downloadProgress=load.progress,error=load.error)}
+    }
+    private fun startDocument(target:DocumentTarget,retry:Boolean=false) {
+        requestJob?.cancel();lastRequest=null
+        mutable.update{it.copy(openingDocument=target,document=null,tab=RepoTab.READ,loading=true,error=null,downloadProgress=null)}
+        val existing=documentLoads[target.key]
+        if(existing!=null&&existing.job?.isCancelled!=true&&(existing.busy||(existing.error!=null&&!retry))){publishDocumentLoad(existing);return}
+        val load=DocumentLoad(target,vault.accountId(),existing?.progress)
+        if(documentLoads.size>20) {
+            val retained=(tabSessions.values.mapNotNull{it.screen.openingDocument?.key}+target.key).toSet()
+            documentLoads.entries.removeAll{it.key !in retained&&it.value.job?.isCompleted==true}
+        }
+        documentLoads[target.key]=load;publishDocumentLoad(load)
+        val read:suspend CoroutineScope.(String?)->Unit={transferId->
+            try {
+                val doc=api.document(target.repo,target.ref,target.path){progress->withContext(Dispatchers.Main.immediate){
+                    if(transferId!=null)DocumentDownloadService.progress(transferId,progress)
+                    if(documentLoads[target.key]===load){load.progress=progress;publishDocumentLoad(load)}
+                }}
+                ensureActive();load.document=doc;load.error=null
+            }catch(e:CancellationException){
+                if(generateSequence<Throwable>(e){it.cause}.any{it is DownloadPausedException})load.error="文件加载已暂停，点击重试继续。"
+                else throw e
+            }
+            catch(e:Exception){
+                if(e is GitHubException&&e.status==401&&vault.accountId()==load.account){
+                    api.clearAccountFiles();vault.clear();switchAccount(null)
+                }else load.error=e.message?:"文件加载失败，请重试。"
+            }finally{if(currentCoroutineContext().isActive||load.error!=null){load.busy=false;publishDocumentLoad(load)}}
+        }
+        load.job=try {
+            if(target.path.substringAfterLast('.').lowercase() in setOf("pdf","epub"))
+                DocumentDownloadService.prepare(getApplication(),target.path.substringAfterLast('/')){id->read(id)}
+            else viewModelScope.launch(start=CoroutineStart.LAZY){read(null)}
+        }catch(_:Exception){
+            load.busy=false;load.error="暂时无法启动文件加载，请返回应用后重试。";publishDocumentLoad(load);return
+        }
+        load.job!!.start()
+    }
+    fun cancelFileDownload() {
+        val target=mutable.value.openingDocument?:return
+        documentLoads[target.key]?.let{it.job?.cancel();it.busy=false;it.error=null}
+        mutable.update{it.copy(openingDocument=null,downloadProgress=null,loading=false,error=null,immersive=false)}
+        back()
     }
     fun back() {
         val s=mutable.value
         when {
             s.filePicker!=null -> dismissFilePicker()
-            s.immersive -> mutable.update { it.copy(immersive=false) }
-            s.issue != null -> mutable.update { it.copy(issue=null,comments=emptyList()) }
+            s.immersive&&s.openingDocument==null -> mutable.update { it.copy(immersive=false) }
+            s.issue != null -> {
+                requestJob?.cancel();lastRequest=null
+                mutable.update { it.copy(issue=null,comments=emptyList(),loading=false,downloadProgress=null,error=null) }
+            }
             s.tab==RepoTab.FILES && s.directory.isNotEmpty() -> loadDirectory(s.directory.substringBeforeLast('/',""))
-            readingHistory.isNotEmpty() && s.tab==RepoTab.READ -> { flushProgress();display(readingHistory.removeLast()) }
+            readingHistory.isNotEmpty() && s.tab==RepoTab.READ -> {
+                requestJob?.cancel();lastRequest=null;flushProgress()
+                mutable.update{it.copy(loading=false,downloadProgress=null,openingDocument=null,error=null)}
+                display(readingHistory.removeLast())
+            }
             s.tab!=RepoTab.READ -> selectTab(RepoTab.READ)
             else -> returnToHome()
         }
     }
     fun selectTab(tab: RepoTab) {
+        if(mutable.value.tab==RepoTab.READ&&tab!=RepoTab.READ)flushProgress()
         dismissFilePicker()
+        if(tab==RepoTab.READ&&mutable.value.openingDocument!=null) {
+            requestJob?.cancel();lastRequest=null;mutable.update{it.copy(tab=tab,issue=null)}
+            mutable.value.openingDocument?.let{documentLoads[it.key]?.let(::publishDocumentLoad)}
+            return
+        }
+        if(tab==RepoTab.READ&&mutable.value.document!=null) {
+            requestJob?.cancel();lastRequest=null
+            mutable.update{it.copy(tab=RepoTab.READ,issue=null,error=null,loading=false,downloadProgress=null)}
+            return
+        }
         mutable.update { it.copy(tab=tab,issue=null,error=null) }
         when(tab) {
             RepoTab.FILES -> loadDirectory(mutable.value.directory)
@@ -296,7 +376,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
         dismissFilePicker()
         val s=mutable.value;val id=s.project?.id ?: return
         flushProgress();readingHistory.clear()
-        mutable.update { it.copy(ref=ref,document=null,directory="",files=emptyList(),headings=emptyList()) }
+        mutable.update { it.copy(ref=ref,document=null,openingDocument=null,directory="",files=emptyList(),headings=emptyList()) }
         request { display(api.readme(id,ref)) }
     }
     fun toggleRaw() { mutable.update { it.copy(raw=!it.raw) } }
@@ -309,7 +389,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun flushProgress() {
         val s=mutable.value;val doc=s.document ?: return
-        if(!doc.markdown || s.raw) return
+        if((!doc.markdown&&doc.attachment?.kind!=PreviewKind.EPUB) || s.raw) return
         val bookmark=Bookmark(doc.repo,doc.ref,doc.path,s.progress)
         store.saveProgress(bookmark);mutable.update { it.copy(resume=bookmark) };lastSaved=System.currentTimeMillis()
     }
@@ -326,6 +406,37 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     fun setPreviewDiagnosticsEnabled(enabled:Boolean) {
         store.previewDiagnosticsEnabled=enabled
         mutable.update{it.copy(previewDiagnosticsEnabled=enabled)}
+    }
+    fun refreshCacheSize() {
+        if(mutable.value.cacheBusy)return
+        cacheJob?.cancel()
+        cacheJob=viewModelScope.launch {
+            mutable.update{it.copy(cacheBusy=true,cacheMessage=null)}
+            try{val bytes=withContext(Dispatchers.IO){contentCache.size()};mutable.update{it.copy(cacheBytes=bytes)}}
+            catch(e:CancellationException){throw e}
+            catch(_:Exception){mutable.update{it.copy(cacheMessage="暂时无法读取缓存大小，请重试。")}}
+            finally{mutable.update{it.copy(cacheBusy=false)}}
+        }
+    }
+    fun clearCache() {
+        if(mutable.value.cacheBusy||mutable.value.authBusy)return
+        cacheJob=viewModelScope.launch {
+            mutable.update{it.copy(cacheBusy=true,cacheMessage=null)}
+            try {
+                flushProgress();val pickerJob=filePickerJob;dismissFilePicker()
+                // Wait for blocking downloads to finish cancellation before deleting their files.
+                for(job in listOf(requestJob,libraryJob,imageJob,starSearchJob,pickerJob)+documentLoads.values.map{it.job})job?.cancelAndJoin()
+                documentLoads.clear()
+                pendingImage=null
+                tabSessions.entries.removeAll{it.value.screen.openingDocument!=null||it.value.screen.document?.attachment!=null||it.value.history.any{doc->doc.attachment!=null}}
+                readingHistory.removeAll{it.attachment!=null}
+                val bytes=withContext(Dispatchers.IO){contentCache.clear();contentCache.size()}
+                mutable.update{it.copy(cacheBytes=bytes,cacheMessage="缓存已清理。",imageToSave=null,imageSaving=false,
+                    loading=false,openingDocument=null,downloadProgress=null,starSearchBusy=false,savedRefreshing=false,discoverRefreshing=false)}
+            }catch(e:CancellationException){throw e}
+            catch(_:Exception){mutable.update{it.copy(cacheMessage="部分缓存未能清理，请稍后重试。")}}
+            finally{mutable.update{it.copy(cacheBusy=false)}}
+        }
     }
     fun previewImage(url:String) {
         val doc=mutable.value.document?:return
@@ -470,7 +581,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     fun searchStars(query:String,refresh:Boolean=false) {
         if(refresh)resetStarIndex()
         requestJob?.cancel()
-        mutable.update{it.copy(loading=false,error=null,starSearchQuery=query,
+        mutable.update{it.copy(loading=false,downloadProgress=null,error=null,starSearchQuery=query,
             starSearchResults=if(refresh)it.starSearchResults else starIndex.values.filter{p->matchesStar(p,query)},
             starSearchComplete=starIndexComplete,starSearchScanned=starIndex.size,starSearchError=null,
             savedRefreshing=refresh||it.savedRefreshing)}

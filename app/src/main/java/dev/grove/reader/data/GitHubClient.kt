@@ -3,6 +3,11 @@ package dev.grove.reader.data
 import dev.grove.reader.domain.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -18,9 +23,12 @@ class GitHubException(message: String, val status: Int? = null) : Exception(mess
 class GitHubClient(private val cacheDir: File, private val token: () -> String = { "" },
     private val account: () -> String = { "anonymous" },
     private val connectionFactory: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }) {
-    suspend fun request(path: String, allowCache: Boolean = true): String = withContext(Dispatchers.IO) {
+    // Shared across clients too: an Activity can be recreated while its service is downloading.
+    companion object { private val attachmentLocks=java.util.concurrent.ConcurrentHashMap<String,Mutex>() }
+    suspend fun request(path: String, allowCache: Boolean = true,accept:String="application/vnd.github+json"): String = withContext(Dispatchers.IO) {
         val credential = token()
-        val key = MessageDigest.getInstance("SHA-256").digest((credential.hashCode().toString()+path).toByteArray()).joinToString("") { "%02x".format(it) }
+        val variant=if(accept=="application/vnd.github+json")""else"|$accept"
+        val key = MessageDigest.getInstance("SHA-256").digest((credential.hashCode().toString()+path+variant).toByteArray()).joinToString("") { "%02x".format(it) }
         val file = File(cacheDir, "$key.json")
         val etagFile = File(cacheDir, "$key.etag")
         cacheDir.mkdirs()
@@ -28,7 +36,7 @@ class GitHubClient(private val cacheDir: File, private val token: () -> String =
         try {
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 15_000; connection.readTimeout = 20_000
-            connection.setRequestProperty("Accept", "application/vnd.github+json")
+            connection.setRequestProperty("Accept", accept)
             connection.setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
             connection.setRequestProperty("User-Agent", "Grove-Android/0.2")
             if (credential.isNotBlank()) connection.setRequestProperty("Authorization", "Bearer $credential")
@@ -36,6 +44,7 @@ class GitHubClient(private val cacheDir: File, private val token: () -> String =
             val status = connection.responseCode
             if (status == 304 && credential.isBlank() && file.exists()) return@withContext file.readText()
             if (status !in 200..299) {
+                if(accept=="application/vnd.github.object+json")largeFileSizeError(connection,status)?.let{throw GitHubException(it,status)}
                 val message = when {
                     status == 401 -> "登录已失效，请重新授权。"
                     status == 404 -> "未找到内容。若是私有仓库，请先登录并在「仓库授权」中允许 Grove 访问；组织仓库可能需要管理员批准。"
@@ -75,12 +84,29 @@ class GitHubClient(private val cacheDir: File, private val token: () -> String =
     }
     suspend fun readme(id: RepoId, ref: String): Document = decodeDocument(id, ref,
         JSONObject(request("/repos/${id.fullName}/readme?ref=${encode(ref)}")))
-    suspend fun document(id: RepoId, ref: String, path: String): Document {
+    suspend fun document(id: RepoId, ref: String, path: String,
+        onDownloadProgress:suspend (FileDownloadProgress)->Unit={}): Document {
         val expectedAccount=account()
         val route="/repos/${id.fullName}/contents/${encodePath(path)}?ref=${encode(ref)}"
-        val json=JSONObject(request(route))
-        if(json.optLong("size")>20_000_000)throw GitHubException("文件超过 20 MB，请在 GitHub 中打开。")
-        return if(json.optString("encoding")=="base64")decodeDocument(id,ref,json)
+        val streamedType=when(path.substringAfterLast('.').lowercase()) {
+            "epub"->PreviewType(PreviewKind.EPUB,"application/epub+zip")
+            "pdf"->PreviewType(PreviewKind.PDF,"application/pdf")
+            else->null
+        }
+        val json=JSONObject(request(route,accept=if(streamedType!=null)"application/vnd.github.object+json"else"application/vnd.github+json"))
+        if(streamedType==null&&json.optLong("size")>20_000_000L)throw GitHubException("文件超过 20 MB，请在 GitHub 中打开。")
+        if(streamedType!=null&&json.optString("encoding")!="base64")return downloadAttachment(id,ref,path,route,json,expectedAccount,streamedType,onDownloadProgress)
+        return if(json.optString("encoding")=="base64") {
+            currentCoroutineContext().ensureActive()
+            if(account()!=expectedAccount)throw kotlinx.coroutines.CancellationException("账号已切换")
+            streamedType?.let{onDownloadProgress(FileDownloadProgress(0,json.optLong("size").takeIf{it>0},it.kind))}
+            val doc=decodeDocument(id,ref,json)
+            streamedType?.let{type->doc.attachment?.let{attachment->
+                val size=File(attachment.localPath).length()
+                onDownloadProgress(FileDownloadProgress(size,size,type.kind))
+            }}
+            doc
+        }
         else withContext(Dispatchers.IO) {
             val bytes=download("https://api.github.com$route",true,20_000_000)
             if(account()!=expectedAccount)throw kotlinx.coroutines.CancellationException("账号已切换")
@@ -88,7 +114,8 @@ class GitHubClient(private val cacheDir: File, private val token: () -> String =
         }
     }
     private fun decodeDocument(id: RepoId, ref: String, json: JSONObject): Document {
-        if (json.optLong("size") > 20_000_000 || json.optString("encoding") != "base64")
+        val streamed=json.optString("path").substringAfterLast('.').lowercase() in setOf("epub","pdf")
+        if ((!streamed&&json.optLong("size") > 20_000_000L) || json.optString("encoding") != "base64")
             throw GitHubException("文件超过预览大小限制，请在 GitHub 中打开。")
         val bytes = Base64.getMimeDecoder().decode(json.getString("content"))
         return decodeFile(id,ref,json.getString("path"),bytes,json.optString("sha"))
@@ -96,7 +123,7 @@ class GitHubClient(private val cacheDir: File, private val token: () -> String =
     private fun decodeFile(id: RepoId, ref: String, path: String, bytes: ByteArray, revision: String=""): Document {
         val preview=previewType(path,bytes)
         if(preview!=null) {
-            if(preview.kind!=PreviewKind.PDF && bytes.size>10_000_000)throw GitHubException("图片和表格预览支持至多 10 MB 的文件。")
+            if(preview.kind in setOf(PreviewKind.IMAGE,PreviewKind.SPREADSHEET) && bytes.size>10_000_000)throw GitHubException("图片和表格预览支持至多 10 MB 的文件。")
             if(preview.kind==PreviewKind.SPREADSHEET && bytes.take(2)==listOf(80.toByte(),75.toByte()))validateWorkbook(bytes)
             val folder=File(cacheDir,"attachments/"+hash(account())).apply {mkdirs()}
             val file=File(folder,hash("${id.fullName}:$ref:$path:$revision"))
@@ -111,6 +138,143 @@ class GitHubClient(private val cacheDir: File, private val token: () -> String =
         return Document(id, ref, path, bytes.toString(Charsets.UTF_8))
     }
     private fun hash(value:String)=MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString(""){"%02x".format(it)}
+    private fun largeFileSizeError(connection:HttpURLConnection,status:Int):String? {
+        val message=runCatching{connection.errorStream?.bufferedReader()?.use{reader->
+            val chars=CharArray(8192);val n=reader.read(chars);if(n>0)String(chars,0,n)else""
+        }.orEmpty()}.getOrDefault("")
+        return if(status==413||Regex("too large|larger than.{0,30}100|blobs? up to 100",RegexOption.IGNORE_CASE).containsMatchIn(message))
+            "GitHub 服务端不支持通过此接口读取该大文件，请在 GitHub 中下载后查看。" else null
+    }
+    private suspend fun downloadAttachment(id:RepoId,ref:String,path:String,route:String,json:JSONObject,expectedAccount:String,type:PreviewType,
+        onDownloadProgress:suspend (FileDownloadProgress)->Unit):Document {
+        val key="${cacheDir.absolutePath}:$expectedAccount:${id.fullName}:$ref:$path"
+        return attachmentLocks.getOrPut(key){Mutex()}.withLock {
+            streamAttachment(id,ref,path,route,json,expectedAccount,type,onDownloadProgress)
+        }
+    }
+    private suspend fun streamAttachment(id:RepoId,ref:String,path:String,route:String,json:JSONObject,expectedAccount:String,type:PreviewType,
+        onDownloadProgress:suspend (FileDownloadProgress)->Unit):Document=withContext(Dispatchers.IO) {
+        val label=type.kind.name
+        fun checkAccount(){if(account()!=expectedAccount)throw kotlinx.coroutines.CancellationException("账号已切换")}
+        fun document(file:File)=Document(id,ref,path,"",Attachment(type.kind,type.mimeType,file.absolutePath))
+        checkAccount()
+        val folder=File(cacheDir,"attachments/"+hash(expectedAccount)).apply{mkdirs()}
+        val revision=json.optString("sha")
+        val target=File(folder,hash("${id.fullName}:$ref:$path:$revision"))
+        if(revision.isNotBlank()&&target.isFile&&target.length()>0&&
+            (json.optLong("size")<=0||target.length()==json.optLong("size"))) {
+            checkAccount();return@withContext document(target)
+        }
+        val partialPrefix=hash("${id.fullName}:$ref:$path")+"-"
+        val partial=File(folder,partialPrefix+hash(revision)+".part")
+        folder.listFiles { f->f.name.startsWith(partialPrefix)&&f.extension=="part"&&f!=partial }?.forEach{it.delete()}
+        var offset=if(revision.isNotBlank()&&partial.isFile)partial.length()else 0L
+        if(json.optLong("size")>0&&offset>json.optLong("size")){partial.delete();offset=0}
+        var connection:HttpURLConnection?=null
+        var retainPartial=false
+        fun resumablePause(error:Throwable)=revision.isNotBlank()&&account()==expectedAccount&&
+            generateSequence(error){it.cause}.any{it is DownloadPausedException}
+        var expectedLength:Long?=json.optLong("size").takeIf{it>0}
+        // Contents raw responses can ignore Range. The freshly authorized metadata supplies a
+        // short-lived URL on GitHub's raw host, which supports partial responses.
+        val rawUrl=runCatching{URL(json.optString("download_url"))}.getOrNull()?.takeIf{
+            it.protocol=="https"&&it.host=="raw.githubusercontent.com"&&it.userInfo==null&&(it.port==-1||it.port==443)
+        }
+        suspend fun report(bytes:Long) {
+            currentCoroutineContext().ensureActive();checkAccount()
+            onDownloadProgress(FileDownloadProgress(bytes,expectedLength?.takeIf{bytes<=it},type.kind))
+        }
+        suspend fun commit(total:Long):Document {
+            val prefix=partial.inputStream().use{input->val bytes=ByteArray(8);val n=input.read(bytes);bytes.copyOf(n.coerceAtLeast(0))}
+            if(previewType(path,prefix)?.kind!=type.kind)throw GitHubException("下载内容不是有效的 $label 文件。")
+            if(revision.matches(Regex("[0-9a-fA-F]{40}"))) {
+                val digest=MessageDigest.getInstance("SHA-1").apply{update("blob $total\u0000".toByteArray())}
+                partial.inputStream().use{input->val buffer=ByteArray(65536);while(true){
+                    currentCoroutineContext().ensureActive();checkAccount()
+                    val n=input.read(buffer);if(n<0)break;digest.update(buffer,0,n)
+                }}
+                val actual=digest.digest().joinToString(""){"%02x".format(it)}
+                if(!actual.equals(revision,true))throw GitHubException("文件版本已变化或下载校验失败，请重试。")
+            }
+            currentCoroutineContext().ensureActive();checkAccount()
+            if(!partial.renameTo(target))throw java.io.IOException("Unable to commit attachment cache")
+            if(account()!=expectedAccount){target.delete();throw kotlinx.coroutines.CancellationException("账号已切换")}
+            report(total)
+            return document(target)
+        }
+        try {
+            // A system interruption can occur after the last byte but before cache commit.
+            // Verify that complete partial locally instead of sending an unsatisfiable Range.
+            if(offset>0&&offset==expectedLength){report(offset);return@withContext commit(offset)}
+            var restarted=false
+            var length:Long
+            while(true) {
+                currentCoroutineContext().ensureActive();checkAccount()
+                val active=connectionFactory(rawUrl?:URL("https://api.github.com$route"));connection=active
+                active.connectTimeout=15_000;active.readTimeout=25_000;active.instanceFollowRedirects=false
+                active.setRequestProperty("Accept","application/vnd.github.raw+json")
+                active.setRequestProperty("Accept-Encoding","identity")
+                active.setRequestProperty("X-GitHub-Api-Version","2022-11-28")
+                active.setRequestProperty("User-Agent","Grove-Android/0.4.2")
+                // Private raw URLs already contain a temporary download token. Never forward
+                // the account bearer token beyond api.github.com, or follow a redirect with it.
+                if(rawUrl==null)token().takeIf{it.isNotBlank()}?.let{active.setRequestProperty("Authorization","Bearer $it")}
+                if(offset>0)active.setRequestProperty("Range","bytes=$offset-")
+                currentCoroutineContext().ensureActive();checkAccount()
+                val status=active.responseCode
+                val range=if(status==206)Regex("bytes (\\d+)-(\\d+)/(\\d+|\\*)").matchEntire(active.getHeaderField("Content-Range").orEmpty())else null
+                val start=range?.groupValues?.get(1)?.toLongOrNull()
+                val end=range?.groupValues?.get(2)?.toLongOrNull()
+                val rangeTotal=range?.groupValues?.get(3)?.toLongOrNull()
+                val invalidRange=status==206&&(start!=offset||end==null||end<offset||(rangeTotal!=null&&end>=rangeTotal))
+                if((status==416&&offset>0)||invalidRange) {
+                    if(restarted)throw GitHubException("$label 续传响应无效，请重试。")
+                    active.disconnect();connection=null;partial.delete();offset=0;restarted=true;continue
+                }
+                if(status !in 200..299) {
+                    retainPartial=revision.isNotBlank()&&account()==expectedAccount
+                    throw GitHubException(largeFileSizeError(active,status)?:if(status==401||status==403)"无法读取 $label，请检查登录和仓库授权。"else"$label 下载失败（$status），请重试。",status)
+                }
+                // A server may ignore Range and return the whole file. Replace rather than append.
+                if(status!=206)offset=0
+                length=active.contentLengthLong
+                expectedLength=rangeTotal?:if(status==206)json.optLong("size").takeIf{it>0}?:end?.plus(1)
+                    else length.takeIf{it>0}?:json.optLong("size").takeIf{it>0}
+                break
+            }
+            report(offset)
+            var total=offset
+            var lastReport=System.nanoTime()
+            connection!!.inputStream.use{input->java.io.FileOutputStream(partial,offset>0).use{output->
+                val buffer=ByteArray(65536)
+                while(true) {
+                    currentCoroutineContext().ensureActive();checkAccount()
+                    val n=input.read(buffer);if(n<0)break
+                    checkAccount();total+=n
+                    output.write(buffer,0,n)
+                    val now=System.nanoTime()
+                    if(now-lastReport>=100_000_000L){report(total);lastReport=now}
+                }
+            }}
+            if((length>=0&&total-offset!=length)||(expectedLength!=null&&total!=expectedLength)) {
+                retainPartial=revision.isNotBlank()&&(expectedLength?.let{total<it}?:true)
+                report(total);throw GitHubException("$label 下载未完成，请重试。")
+            }
+            commit(total)
+        }catch(e:kotlinx.coroutines.CancellationException){
+            retainPartial=resumablePause(e)
+            throw e
+        }
+        catch(e:java.io.IOException){
+            try{currentCoroutineContext().ensureActive()}catch(cancel:kotlinx.coroutines.CancellationException){
+                retainPartial=resumablePause(cancel);throw cancel
+            }
+            retainPartial=revision.isNotBlank()&&account()==expectedAccount
+            if(retainPartial&&partial.isFile)report(partial.length())
+            throw GitHubException("$label 下载失败，请检查网络或设备存储空间后重试。")
+        }
+        finally{if(!retainPartial||account()!=expectedAccount)partial.delete();connection?.disconnect()}
+    }
     private fun validateWorkbook(bytes:ByteArray) {
         var total=0L;var entries=0
         ZipInputStream(bytes.inputStream()).use {zip->

@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <application android:label="Grove" android:icon="@drawable/ic_grove"
         android:theme="@style/Theme.Grove" android:allowBackup="false" android:dataExtractionRules="@xml/data_extraction_rules"
         android:usesCleartextTraffic="false" android:supportsRtl="true">
+        <service android:name=".DocumentDownloadService" android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

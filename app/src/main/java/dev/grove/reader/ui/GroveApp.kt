@@ -42,12 +42,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -106,8 +108,10 @@ fun GroveApp(model:GroveViewModel) {
     var imports by remember {mutableStateOf(false)}
     var importing by remember {mutableStateOf(false)}
     var addedRepos by remember {mutableStateOf(false)}
+    var repositoryMore by remember(s.username,s.project?.id){mutableStateOf(false)}
     LaunchedEffect(imports,s.username){if(imports&&s.username.isNotBlank())model.loadMyRepositories()}
     var jump by remember(s.document?.key) {mutableStateOf<String?>(null)}
+    val loadingFile=s.openingDocument!=null&&s.tab==RepoTab.READ
     fun openLink(url:String) {
         if(model.followLink(url))return
         val uri=Uri.parse(url)
@@ -120,26 +124,18 @@ fun GroveApp(model:GroveViewModel) {
         large=androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
         extraLarge=androidx.compose.foundation.shape.RoundedCornerShape(8.dp))) {
         BackHandler(enabled=s.project!=null){model.back()}
-        Scaffold(containerColor=Paper,bottomBar={if(!s.immersive)BottomNavigation(s.destination,model::navigate)}) { padding ->
+        Scaffold(containerColor=Paper,bottomBar={if(!s.immersive||loadingFile)BottomNavigation(s.destination,model::navigate)}) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
                 screens.SaveableStateProvider(screenKey) {
                 if(s.project!=null) {
-                    if(!s.immersive) {
-                        CompactHeader(s.project!!.id.name,onBack=model::back,subtitle=s.project!!.id.owner) {
-                            RepositoryStar(s.project!!,s,model)
-                            TextButton(onClick={branches=true;model.loadBranches()}) {Icon(Icons.Outlined.AccountTree,null,Modifier.size(13.dp));Spacer(Modifier.width(4.dp));Text(s.ref,fontSize=10.sp,maxLines=1,overflow=TextOverflow.Ellipsis)}
-                        }
-                        Row(Modifier.fillMaxWidth().padding(horizontal=20.dp)) {
-                            RepoTab.entries.forEach { tab ->
-                                TextButton(onClick={model.selectTab(tab)},modifier=Modifier.weight(1f)) {
-                                    Text(tab.label,fontSize=12.sp,color=if(s.tab==tab)Ink else Muted,fontWeight=if(s.tab==tab)FontWeight.Bold else FontWeight.Normal)
-                                }
-                            }
-                        }
+                    if(!s.immersive||loadingFile) {
+                        val issues=s.tab==RepoTab.ISSUES
+                        if(issues)CompactHeader("Issues",onBack=model::back,subtitle=s.project!!.id.fullName)
+                        else RepositoryHeader(s.project!!.id,model::back,{repositoryMore=true}){RepositoryStar(s.project!!,s,model)}
                         HorizontalDivider(color=Rule)
                     }
-                    if(s.loading)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp),color=Muted,trackColor=Rule)
-                    s.error?.let { ErrorNotice(it,model::retry) }
+                    if(s.loading&&!loadingFile)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp),color=Muted,trackColor=Rule)
+                    if(!loadingFile)s.error?.let { ErrorNotice(it,model::retry) }
                     when(s.tab) {
                         RepoTab.READ -> ReaderPage(s,model,{settings=true},{toc=true},model::openFilePicker,::openLink,jump)
                         RepoTab.FILES -> FilesPage(s,model)
@@ -161,20 +157,24 @@ fun GroveApp(model:GroveViewModel) {
             ModalBottomSheet(onDismissRequest=model::dismissFilePicker,containerColor=Paper,tonalElevation=0.dp,
                 sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true)) {
                 Column(Modifier.fillMaxWidth().heightIn(min=260.dp,max=540.dp)) {
+                    var query by remember(picker.directory){mutableStateOf("")}
+                    var search by remember(picker.directory){mutableStateOf(false)}
+                    val focusManager=LocalFocusManager.current
                     CompactHeader("选择文件",subtitle=s.project?.id?.name,
                         onBack=if(picker.directory.isNotBlank())({model.loadPickerDirectory(picker.directory.substringBeforeLast('/',""))})else null) {
+                        IconButton(onClick={search=!search;if(!search){query="";focusManager.clearFocus()}}) {
+                            Icon(Icons.Outlined.Search,if(search)"收起文件搜索"else"搜索文件",Modifier.size(19.dp),tint=if(search)Ink else Muted)
+                        }
                         IconButton(onClick=model::dismissFilePicker){Icon(Icons.Outlined.Close,"关闭文件面板",Modifier.size(19.dp))}
                     }
                     HorizontalDivider(color=Rule)
-                    var query by remember(picker.directory){mutableStateOf("")}
                     Row(Modifier.fillMaxWidth().padding(start=14.dp,end=22.dp),verticalAlignment=Alignment.CenterVertically) {
                         TextButton(onClick={model.loadPickerDirectory("")},enabled=picker.directory.isNotBlank(),modifier=Modifier.weight(1f)) {
                             Text(if(picker.directory.isBlank())"/"else"/ ${picker.directory}",fontSize=11.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
                         }
                         Text(s.ref,fontSize=10.sp,color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.widthIn(max=100.dp))
                     }
-                    OutlinedTextField(query,{query=it},modifier=Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=5.dp),
-                        placeholder={Text("筛选当前目录",fontSize=12.sp)},singleLine=true,leadingIcon={Icon(Icons.Outlined.Search,null,Modifier.size(17.dp))})
+                    if(search)InlineSearch(query,{query=it},"筛选当前目录","清除文件搜索")
                     if(picker.loading)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp),color=Muted,trackColor=Rule)
                     picker.error?.let{ErrorNotice(it){model.loadPickerDirectory(picker.directory)}}
                     val listState=rememberLazyListState()
@@ -241,6 +241,18 @@ fun GroveApp(model:GroveViewModel) {
                 Spacer(Modifier.height(14.dp))
             }
         }
+        if(repositoryMore&&s.project!=null)ModalBottomSheet(onDismissRequest={repositoryMore=false},containerColor=Paper,tonalElevation=0.dp) {
+            CompactHeader("仓库操作",subtitle=s.project!!.id.fullName) {
+                IconButton(onClick={repositoryMore=false}){Icon(Icons.Outlined.Close,"关闭仓库操作",Modifier.size(19.dp))}
+            }
+            HorizontalDivider(color=Rule)
+            Column(Modifier.fillMaxWidth().padding(horizontal=24.dp)) {
+                Text("当前分支：${s.ref}",Modifier.padding(top=18.dp,bottom=4.dp),fontSize=10.sp,color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis)
+                MoreAction(Icons.Outlined.AccountTree,"切换分支"){repositoryMore=false;branches=true;model.loadBranches()}
+                MoreAction(Icons.Outlined.Adjust,"查看 Issues"){repositoryMore=false;model.selectTab(RepoTab.ISSUES)}
+                Spacer(Modifier.height(24.dp))
+            }
+        }
         if(branches)ModalBottomSheet(onDismissRequest={branches=false},containerColor=Paper) {
             Text("切换分支",Modifier.padding(horizontal=24.dp,vertical=12.dp),fontFamily=FontFamily.Serif,fontSize=21.sp)
             if(s.loading&&s.branches.isEmpty())CircularProgressIndicator(Modifier.padding(24.dp).size(24.dp),color=Muted)
@@ -290,6 +302,19 @@ fun GroveApp(model:GroveViewModel) {
             Text(title,fontSize=17.sp,fontWeight=FontWeight.Medium,maxLines=1,overflow=TextOverflow.Ellipsis)
         }
         actions()
+    }
+}
+
+@Composable private fun RepositoryHeader(id:RepoId,onBack:()->Unit,onMore:()->Unit,star:@Composable ()->Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min=53.dp).padding(start=6.dp,end=9.dp),verticalAlignment=Alignment.CenterVertically) {
+        IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"返回",Modifier.size(19.dp))}
+        Row(Modifier.weight(1f).padding(end=8.dp).semantics(mergeDescendants=true){contentDescription=id.fullName}) {
+            Text(id.owner,Modifier.widthIn(max=88.dp).alignByBaseline(),fontSize=12.sp,color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis)
+            Text(" / ",Modifier.alignByBaseline(),fontSize=12.sp,color=Muted)
+            Text(id.name,Modifier.weight(1f).alignByBaseline(),fontSize=16.sp,fontFamily=FontFamily.Serif,fontWeight=FontWeight.Medium,maxLines=1,overflow=TextOverflow.Ellipsis)
+        }
+        star()
+        IconButton(onClick=onMore){Icon(Icons.Outlined.MoreHoriz,"更多仓库操作",Modifier.size(22.dp))}
     }
 }
 
@@ -546,6 +571,7 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
     val context=LocalContext.current
     var more by remember {mutableStateOf(false)}
     var developerOptions by remember {mutableStateOf(false)}
+    var cacheManagement by remember {mutableStateOf(false)}
     CompactHeader("我的") {
         IconButton(onClick={more=true}){Icon(Icons.Outlined.MoreHoriz,"更多功能",Modifier.size(22.dp))}
     }
@@ -555,6 +581,7 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
         Column(Modifier.fillMaxWidth().heightIn(max=480.dp).verticalScroll(rememberScrollState()).padding(horizontal=24.dp)) {
             MoreAction(Icons.Outlined.TextFields,"阅读偏好"){more=false;settings()}
             MoreAction(Icons.Outlined.FolderOpen,"已添加的仓库"){more=false;addedRepos()}
+            MoreAction(Icons.Outlined.Storage,"缓存管理"){more=false;cacheManagement=true;model.refreshCacheSize()}
             if(s.username.isNotBlank()&&BuildConfig.GITHUB_APP_SLUG.isNotBlank())MoreAction(Icons.Outlined.Lock,"仓库授权"){
                 more=false;contextOpen(context,"https://github.com/apps/${BuildConfig.GITHUB_APP_SLUG}/installations/new")
             }
@@ -580,6 +607,20 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
             }
             HorizontalDivider(color=Rule)
             Spacer(Modifier.height(24.dp))
+        }
+    }
+    if(cacheManagement)ModalBottomSheet(onDismissRequest={cacheManagement=false},containerColor=Paper,tonalElevation=0.dp) {
+        CompactHeader("缓存管理") {IconButton(onClick={cacheManagement=false}){Icon(Icons.Outlined.Close,"关闭缓存管理",Modifier.size(19.dp))}}
+        HorizontalDivider(color=Rule)
+        Column(Modifier.fillMaxWidth().padding(24.dp),verticalArrangement=Arrangement.spacedBy(20.dp)) {
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                Text("缓存大小",Modifier.weight(1f),fontSize=13.sp)
+                if(s.cacheBusy)CircularProgressIndicator(Modifier.size(16.dp),strokeWidth=1.dp,color=Muted)
+                else Text(s.cacheBytes?.let(::formatCacheSize)?:"—",fontSize=20.sp,fontFamily=FontFamily.Serif)
+            }
+            Text("清理临时文档和附件。登录状态、书签、足迹及阅读进度会保留；再次打开内容时会重新下载。",fontSize=11.sp,lineHeight=21.sp,color=Muted)
+            s.cacheMessage?.let{Text(it,fontSize=11.sp,color=Muted)}
+            Button(onClick=model::clearCache,enabled=!s.cacheBusy&&!s.authBusy&&(s.cacheBytes?:0)>0,modifier=Modifier.fillMaxWidth()){Text("一键清理")}
         }
     }
     HorizontalDivider(color=Rule)
@@ -627,6 +668,27 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
     }
     HorizontalDivider(color=Rule)
 }
+@Composable internal fun FileDownloadNotice(progress:FileDownloadProgress,running:Boolean=true) {
+    val fraction=progress.fraction
+    Column(Modifier.fillMaxWidth().testTag("file-download").padding(horizontal=22.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+        if(fraction!=null)LinearProgressIndicator(progress={fraction},modifier=Modifier.fillMaxWidth().height(3.dp),color=Ink,trackColor=Rule)
+        else if(running)LinearProgressIndicator(modifier=Modifier.fillMaxWidth().height(3.dp),color=Muted,trackColor=Rule)
+        else LinearProgressIndicator(progress={0f},modifier=Modifier.fillMaxWidth().height(3.dp),color=Muted,trackColor=Rule)
+        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+            Text(if(fraction!=null)"${formatCacheSize(progress.downloadedBytes)} / ${formatCacheSize(progress.totalBytes!!)}"
+                else "已下载 ${formatCacheSize(progress.downloadedBytes)}",fontSize=10.sp,color=Muted,modifier=Modifier.weight(1f))
+            if(fraction!=null)Text("${(fraction*100).toInt()}%",fontSize=10.sp,color=Muted)
+            else if(!running)Text("等待重试",fontSize=10.sp,color=Muted)
+        }
+    }
+}
+
+private fun formatCacheSize(bytes:Long):String=when {
+    bytes<1024->"$bytes B"
+    bytes<1024*1024->"%.1f KB".format(java.util.Locale.ROOT,bytes/1024.0)
+    bytes<1024L*1024*1024->"%.1f MB".format(java.util.Locale.ROOT,bytes/(1024.0*1024))
+    else->"%.1f GB".format(java.util.Locale.ROOT,bytes/(1024.0*1024*1024))
+}
 @Composable private fun PreferenceRow(icon:ImageVector,title:String,description:String,click:()->Unit) {
     Column {Row(Modifier.fillMaxWidth().clickable(onClick=click).padding(vertical=20.dp),verticalAlignment=Alignment.CenterVertically) {
         Icon(icon,null,Modifier.size(19.dp),tint=Muted);Column(Modifier.weight(1f).padding(horizontal=14.dp),verticalArrangement=Arrangement.spacedBy(7.dp)){Text(title,fontSize=13.sp);Text(description,fontSize=10.sp,color=Muted)}
@@ -635,11 +697,39 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
 }
 
 @Composable private fun ColumnScope.ReaderPage(s:GroveState,model:GroveViewModel,settings:()->Unit,toc:()->Unit,files:()->Unit,onLink:(String)->Unit,jump:String?) {
+    s.openingDocument?.let{target->
+        val kind=when(target.path.substringAfterLast('.').lowercase()) {
+            "pdf"->PreviewKind.PDF;"epub"->PreviewKind.EPUB;else->null
+        }
+        if(kind==null) {
+            if(s.loading)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp).testTag("document-loading"),color=Muted,trackColor=Rule)
+            s.error?.let{ErrorNotice(it,model::retry)}
+            Spacer(Modifier.weight(1f))
+            return
+        }
+        Column(Modifier.weight(1f).fillMaxWidth().testTag("file-loading-region")) {
+            Text(target.path.substringAfterLast('/'),Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=16.dp),
+                fontFamily=FontFamily.Monospace,fontSize=10.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
+            HorizontalDivider(Modifier.padding(horizontal=20.dp),color=Rule)
+            Box(Modifier.weight(1f).fillMaxWidth(),contentAlignment=Alignment.Center) {
+                Column(Modifier.widthIn(max=360.dp).fillMaxWidth().padding(vertical=24.dp),horizontalAlignment=Alignment.CenterHorizontally) {
+                    Text(if(s.loading)"文件加载中"else"文件加载失败",fontFamily=FontFamily.Serif,fontSize=18.sp,color=Ink)
+                    Spacer(Modifier.height(12.dp))
+                    FileDownloadNotice(s.downloadProgress?:FileDownloadProgress(0,null,kind),running=s.loading)
+                    s.error?.let{ErrorNotice(it,model::retry)}
+                    Text(if(s.loading)"可切换页面，下载会继续"else"重试时会优先接着已下载的部分继续",Modifier.padding(horizontal=22.dp,vertical=8.dp),fontSize=10.sp,color=Muted)
+                    TextButton(onClick=model::cancelFileDownload){Text("取消加载",fontSize=11.sp,color=Muted)}
+                }
+            }
+        }
+        return
+    }
     val doc=s.document
     if(doc==null) {if(!s.loading)EmptyNotice("打开一页，开始阅读。","可以先浏览文件，或重试加载 README。");return}
     val context=LocalContext.current
     val previewDiagnostics=remember(doc.key){PreviewDiagnostics(doc)}
     var showPreviewDiagnostics by remember(doc.key){mutableStateOf(false)}
+    var epubContents by remember(doc.key){mutableStateOf(false)}
     if(showPreviewDiagnostics&&s.previewDiagnosticsEnabled)AlertDialog(onDismissRequest={showPreviewDiagnostics=false},containerColor=Paper,
         title={Text("预览诊断",fontFamily=FontFamily.Serif)},
         text={SelectionContainer{Text(previewDiagnostics.report(),Modifier.heightIn(max=360.dp).verticalScroll(rememberScrollState()),fontSize=11.sp,lineHeight=20.sp,fontFamily=FontFamily.Monospace)}},
@@ -652,28 +742,21 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
         }})
     val sourceVertical=rememberSaveable(doc.key,saver=ScrollState.Saver){ScrollState(0)}
     val sourceHorizontal=rememberSaveable(doc.key,saver=ScrollState.Saver){ScrollState(0)}
-    Row(Modifier.fillMaxWidth().padding(start=if(s.immersive)4.dp else 20.dp,end=7.dp),verticalAlignment=Alignment.CenterVertically) {
-        if(s.immersive)IconButton(onClick=model::toggleImmersive){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"退出专注阅读",Modifier.size(18.dp))}
-        Text(doc.path.substringAfterLast('/'),Modifier.weight(1f),fontFamily=FontFamily.Monospace,fontSize=10.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
-        if(doc.svg) {
-            TextButton(onClick={if(s.raw)model.toggleRaw()},modifier=Modifier.semantics{selected=!s.raw},contentPadding=PaddingValues(horizontal=8.dp)){
-                Text("预览",fontSize=10.sp,color=if(!s.raw)Ink else Muted,fontWeight=if(!s.raw)FontWeight.Bold else FontWeight.Normal)
-            }
-            TextButton(onClick={if(!s.raw)model.toggleRaw()},modifier=Modifier.semantics{selected=s.raw},contentPadding=PaddingValues(horizontal=8.dp)){
-                Text("源码",fontSize=10.sp,color=if(s.raw)Ink else Muted,fontWeight=if(s.raw)FontWeight.Bold else FontWeight.Normal)
-            }
-        }else if(doc.markdown)TextButton(onClick=model::toggleRaw){Text(if(s.raw)"阅读" else "源码",fontSize=10.sp)}
-        if(!s.immersive)IconButton(onClick=model::toggleImmersive,modifier=Modifier.size(36.dp)){Icon(Icons.Outlined.Fullscreen,"专注阅读",Modifier.size(18.dp))}
-        IconButton(onClick=model::toggleBookmark,enabled=doc.originUrl==null,modifier=Modifier.size(36.dp)){Icon(if(s.bookmarks.any{it.key==doc.key})Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,"收藏文档",Modifier.size(18.dp))}
-    }
+    var pdfZoomPercent by rememberSaveable(doc.key,doc.attachment?.localPath){mutableIntStateOf(100)}
+    ReaderDocumentHeader(doc,s.raw,s.immersive,s.bookmarks.any{it.key==doc.key},model::toggleRaw,model::toggleImmersive,model::toggleBookmark,
+        pdfZoomPercent,{pdfZoomPercent=it})
     HorizontalDivider(Modifier.padding(horizontal=20.dp),color=Rule)
-    if(doc.attachment?.kind==PreviewKind.PDF)PdfPreview(java.io.File(doc.attachment.localPath),Modifier.weight(1f).fillMaxWidth())
+    if(doc.attachment?.kind==PreviewKind.PDF)PdfPreview(java.io.File(doc.attachment.localPath),Modifier.weight(1f).fillMaxWidth(),zoomPercent=pdfZoomPercent)
+    else if(doc.attachment?.kind==PreviewKind.EPUB)key(doc.key,doc.attachment.localPath){EpubPreview(doc,s.fontSize,s.warm,s.progress,{model.progress(doc.key,it)},onLink,epubContents,{epubContents=false},Modifier.weight(1f).fillMaxWidth()) {navigation->
+        EpubReadingToolbar(navigation,s.progress,files,{epubContents=true},settings)
+    }}
     else if(s.raw&&doc.sourceTooLarge)Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp)) {
         Text("SVG 源码超过 1 MB，请返回预览，长按保存原文件后查看。",fontSize=12.sp,color=Muted,lineHeight=22.sp)
     }
     else if(s.raw||(!doc.markdown&&doc.attachment==null))SelectionContainer(Modifier.weight(1f).fillMaxWidth().verticalScroll(sourceVertical).horizontalScroll(sourceHorizontal).padding(20.dp)) {
         Text(doc.content,fontSize=12.sp,lineHeight=21.sp,fontFamily=FontFamily.Monospace)
     } else DocumentReader(doc,s.fontSize,s.warm,s.progress,onLink,model::progress,model::setHeadings,jump,Modifier.weight(1f).fillMaxWidth(),onImage=model::previewImage,imageResource=model::imageResource,onImageLongPress=model::showImageActions,diagnostics=previewDiagnostics.takeIf{s.previewDiagnosticsEnabled})
+    if(doc.attachment?.kind!=PreviewKind.EPUB) {
     HorizontalDivider(color=Rule)
     Row(Modifier.fillMaxWidth().padding(horizontal=12.dp),verticalAlignment=Alignment.CenterVertically) {
         TextButton(onClick=files){Icon(Icons.Outlined.AccountTree,null,Modifier.size(14.dp));Text(" 文件",fontSize=10.sp)}
@@ -691,15 +774,63 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
             if(s.previewDiagnosticsEnabled&&doc.attachment.kind!=PreviewKind.PDF)IconButton(onClick={showPreviewDiagnostics=true},modifier=Modifier.size(36.dp)){Icon(Icons.Outlined.Info,"预览诊断",Modifier.size(18.dp),tint=Muted)}
         }
     }
+    }
+}
+
+@Composable internal fun ReaderDocumentHeader(doc:Document,raw:Boolean,immersive:Boolean,bookmarked:Boolean,
+    onToggleRaw:()->Unit,onToggleImmersive:()->Unit,onToggleBookmark:()->Unit,pdfZoomPercent:Int=100,onPdfZoom:(Int)->Unit={}) {
+    Row(Modifier.fillMaxWidth().padding(start=if(immersive)4.dp else 20.dp,end=7.dp).testTag("reader-document-header"),verticalAlignment=Alignment.CenterVertically) {
+        if(immersive)IconButton(onClick=onToggleImmersive){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"退出专注阅读",Modifier.size(18.dp))}
+        Text(doc.path.substringAfterLast('/'),Modifier.weight(1f),fontFamily=FontFamily.Monospace,fontSize=10.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
+        if(doc.svg) {
+            TextButton(onClick={if(raw)onToggleRaw()},modifier=Modifier.semantics{selected=!raw},contentPadding=PaddingValues(horizontal=8.dp)){
+                Text("预览",fontSize=10.sp,color=if(!raw)Ink else Muted,fontWeight=if(!raw)FontWeight.Bold else FontWeight.Normal)
+            }
+            TextButton(onClick={if(!raw)onToggleRaw()},modifier=Modifier.semantics{selected=raw},contentPadding=PaddingValues(horizontal=8.dp)){
+                Text("源码",fontSize=10.sp,color=if(raw)Ink else Muted,fontWeight=if(raw)FontWeight.Bold else FontWeight.Normal)
+            }
+        }else if(doc.markdown)TextButton(onClick=onToggleRaw){Text(if(raw)"阅读" else "源码",fontSize=10.sp)}
+        if(doc.attachment?.kind==PreviewKind.PDF)PdfZoomControls(pdfZoomPercent,onPdfZoom)
+        if(!immersive)IconButton(onClick=onToggleImmersive,modifier=Modifier.size(36.dp)){Icon(Icons.Outlined.Fullscreen,"专注阅读",Modifier.size(18.dp))}
+        IconButton(onClick=onToggleBookmark,enabled=doc.originUrl==null,modifier=Modifier.size(36.dp)){Icon(if(bookmarked)Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,"收藏文档",Modifier.size(18.dp))}
+    }
+}
+
+@Composable private fun EpubReadingToolbar(navigation:EpubNavigation,progress:Float,files:()->Unit,contents:()->Unit,settings:()->Unit) {
+    HorizontalDivider(color=Rule)
+    Row(Modifier.fillMaxWidth().heightIn(min=48.dp).padding(horizontal=12.dp).testTag("epub-reading-toolbar"),verticalAlignment=Alignment.CenterVertically) {
+        TextButton(onClick=files) {
+            Icon(Icons.Outlined.AccountTree,null,Modifier.size(14.dp));Text(" 文件",fontSize=10.sp)
+        }
+        TextButton(onClick=contents,enabled=navigation.total>0,modifier=Modifier.heightIn(min=48.dp).semantics{
+            contentDescription="章节目录，第 ${navigation.position} 章，共 ${navigation.total} 章"
+        }) {
+            Icon(Icons.AutoMirrored.Outlined.List,null,Modifier.size(14.dp));Text(" 目录",fontSize=10.sp)
+        }
+        Spacer(Modifier.weight(1f))
+        Row(Modifier.padding(horizontal=8.dp),horizontalArrangement=Arrangement.spacedBy(6.dp),verticalAlignment=Alignment.CenterVertically) {
+            if(navigation.total>0) {
+                Text("${navigation.position}/${navigation.total}章",fontSize=9.sp,color=Muted)
+                Text("·",fontSize=9.sp,color=Muted)
+            }
+            Text("全书约${(progress*100).toInt()}%",fontSize=9.sp,color=Muted)
+        }
+        IconButton(onClick=settings,modifier=Modifier.size(48.dp)){Icon(Icons.Outlined.TextFields,"阅读设置",Modifier.size(18.dp))}
+    }
 }
 
 @Composable private fun ColumnScope.FilesPage(s:GroveState,model:GroveViewModel) {
     var query by remember(s.directory){mutableStateOf("")}
+    var search by remember(s.directory){mutableStateOf(false)}
+    val focusManager=LocalFocusManager.current
     Row(Modifier.fillMaxWidth().padding(horizontal=14.dp),verticalAlignment=Alignment.CenterVertically) {
         if(s.directory.isNotBlank())IconButton(onClick={model.loadDirectory(s.directory.substringBeforeLast('/',""))}){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"上一级",Modifier.size(16.dp))}
         Text(s.directory.ifBlank{"/"},Modifier.weight(1f).padding(vertical=12.dp),fontSize=11.sp,color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis)
+        IconButton(onClick={search=!search;if(!search){query="";focusManager.clearFocus()}}) {
+            Icon(Icons.Outlined.Search,if(search)"收起文件搜索"else"搜索文件",Modifier.size(19.dp),tint=if(search)Ink else Muted)
+        }
     }
-    OutlinedTextField(query,{query=it},Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=5.dp),placeholder={Text("筛选当前目录",fontSize=12.sp)},singleLine=true,leadingIcon={Icon(Icons.Outlined.Search,null,Modifier.size(17.dp))})
+    if(search)InlineSearch(query,{query=it},"筛选当前目录","清除文件搜索")
     LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(horizontal=20.dp,vertical=9.dp)) {
         items(s.files.filter{it.name.contains(query,true)},key={it.path}){f->RepositoryFileRow(f){if(f.folder)model.loadDirectory(f.path)else model.openFile(f.path)}}
         if(s.files.size>=1000)item{Text("此目录可能超过 GitHub Contents API 的显示上限。",Modifier.padding(15.dp),fontSize=11.sp,color=Muted)}

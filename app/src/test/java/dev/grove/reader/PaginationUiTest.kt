@@ -179,7 +179,8 @@ class PaginationUiTest {
     }
     @Test fun issuePaginationSkipsPageContainingOnlyPullRequestsAndContinuesOnScroll() {
         compose.runOnIdle{model.openRepository(RepoId("owner","project"))};awaitLoad()
-        compose.runOnIdle{model.selectTab(RepoTab.ISSUES)};awaitLoad()
+        compose.onNodeWithContentDescription("更多仓库操作").performClick()
+        compose.onNodeWithText("查看 Issues").performClick();awaitLoad()
         compose.waitUntil(10_000){shadowOf(Looper.getMainLooper()).idle();model.state.value.issuePage==2||model.state.value.error!=null};awaitLoad()
         assertNull(model.state.value.error)
         assertEquals(30,model.state.value.issues.size)

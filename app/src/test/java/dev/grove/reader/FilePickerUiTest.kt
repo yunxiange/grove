@@ -39,6 +39,7 @@ class FilePickerUiTest {
     private lateinit var model:GroveViewModel
     private var failDirectory=false
     @Volatile private var directoryGate:CountDownLatch?=null
+    @Volatile private var documentGate:CountDownLatch?=null
     private val directoryStarted=CountDownLatch(1)
     private fun entry(path:String,folder:Boolean=false)=JSONObject().put("path",path).put("type",if(folder)"dir"else"file").put("size",100)
     private fun document(path:String)=JSONObject().put("path",path).put("encoding","base64").put("size",20)
@@ -52,6 +53,8 @@ class FilePickerUiTest {
             val directory=url.path.endsWith("/contents/")||url.path.endsWith("/contents/docs")
             val body=when {
                 url.path.endsWith("/readme") -> document("README.md").toString()
+                url.path.endsWith("/issues") -> JSONArray().toString()
+                url.path.endsWith("/branches") -> JSONArray(listOf(JSONObject().put("name","main"),JSONObject().put("name","feature/reading"))).toString()
                 url.path.endsWith("/contents/") -> JSONArray(listOf(entry("docs",true),entry("README.md"),entry("LICENSE"))).toString()
                 url.path.endsWith("/contents/docs") -> JSONArray(listOf(entry("docs/guide.md"),entry("docs/notes.md"))).toString()
                 url.path.contains("/contents/") -> document(url.path.substringAfter("/contents/")).toString()
@@ -64,6 +67,7 @@ class FilePickerUiTest {
                 override fun getResponseCode()=if(directory&&failDirectory)500 else 200
                 override fun getInputStream():java.io.InputStream {
                     if(directory)directoryGate?.let{directoryStarted.countDown();it.await(10,TimeUnit.SECONDS)}
+                    else if(url.path.contains("/contents/"))documentGate?.let{check(it.await(15,TimeUnit.SECONDS))}
                     return body.inputStream()
                 }
             }
@@ -72,7 +76,7 @@ class FilePickerUiTest {
         compose.setContent{GroveApp(model)}
         compose.runOnIdle{model.openRepository(RepoId("owner","project"))};awaitLoad()
     }
-    @After fun releasePendingDirectory(){directoryGate?.countDown()}
+    @After fun releasePendingDirectory(){directoryGate?.countDown();documentGate?.countDown()}
     private fun awaitLoad() {
         compose.waitUntil(15_000){shadowOf(Looper.getMainLooper()).idle();!model.state.value.loading}
         compose.waitForIdle()
@@ -82,13 +86,41 @@ class FilePickerUiTest {
         compose.waitForIdle()
     }
     private fun openPicker(){compose.onNodeWithText(" 文件").performClick();awaitPicker()}
-    private fun snapshot() {
+    private fun snapshotHeader(name:String,bottom:Float) {
+        compose.runOnIdle {
+            val view=compose.activity.window.decorView
+            val bitmap=Bitmap.createBitmap(view.width,bottom.toInt(),Bitmap.Config.ARGB_8888)
+            view.draw(Canvas(bitmap))
+            File("build/reports/ui/$name.png").apply{parentFile?.mkdirs()}.outputStream().use{bitmap.compress(Bitmap.CompressFormat.PNG,100,it)}
+        }
+    }
+    private fun snapshot(name:String="file-picker") {
         compose.runOnIdle {
             val base=compose.activity.window.decorView
             val bitmap=Bitmap.createBitmap(base.width,base.height,Bitmap.Config.ARGB_8888)
             val canvas=Canvas(bitmap);base.draw(canvas)
             ShadowDialog.getLatestDialog()!!.window!!.decorView.draw(canvas)
-            File("build/reports/ui/file-picker.png").apply{parentFile?.mkdirs()}.outputStream().use{bitmap.compress(Bitmap.CompressFormat.PNG,100,it)}
+            File("build/reports/ui/$name.png").apply{parentFile?.mkdirs()}.outputStream().use{bitmap.compress(Bitmap.CompressFormat.PNG,100,it)}
+        }
+    }
+    @Test fun markdownAndTextLoadingShowOnlyABarWithoutDownloadNumbersOrHints() {
+        for(path in listOf("docs/guide.md","LICENSE.txt")) {
+            val release=CountDownLatch(1);documentGate=release
+            try {
+                compose.runOnIdle{model.openFile(path)}
+                compose.onNodeWithTag("document-loading").assertIsDisplayed()
+                compose.onNodeWithTag("file-download").assertDoesNotExist()
+                compose.onNodeWithText("文件加载中").assertDoesNotExist()
+                compose.onNodeWithText("已下载",substring=true).assertDoesNotExist()
+                compose.onNodeWithText("0%").assertDoesNotExist()
+                compose.onNodeWithText("可切换页面，下载会继续").assertDoesNotExist()
+                compose.onNodeWithText("重试时会优先接着已下载的部分继续").assertDoesNotExist()
+                compose.onNodeWithText("我的").assertIsDisplayed()
+                if(path.endsWith(".md"))snapshotHeader("markdown-loading-bar-v18",compose.onRoot().fetchSemanticsNode().boundsInRoot.bottom)
+                release.countDown();awaitLoad()
+                assertEquals(path,model.state.value.document?.path)
+                compose.onNodeWithTag("document-loading").assertDoesNotExist()
+            }finally{release.countDown();documentGate=null}
         }
     }
     @Test fun bottomFilesOpensPickerWhileKeepingReaderAndDocument() {
@@ -98,7 +130,9 @@ class FilePickerUiTest {
         assertEquals(original,model.state.value.document)
         compose.onNodeWithText("选择文件").assertIsDisplayed()
         compose.onNodeWithText("正在阅读").assertIsDisplayed()
-        snapshot()
+        compose.onNode(hasSetTextAction()).assertDoesNotExist()
+        compose.onNodeWithContentDescription("搜索文件").assertIsDisplayed()
+        snapshot("file-picker-search-collapsed-v14")
     }
     @Test fun folderNavigationAndDismissalPreserveReadingPositionAndFullFilesTab() {
         compose.runOnIdle{model.progress(model.state.value.document!!.key,.42f)}
@@ -118,14 +152,23 @@ class FilePickerUiTest {
     }
     @Test fun selectingFileClosesPickerAndNextPickerStartsInThatFolder() {
         openPicker();compose.onNodeWithText("docs").performClick();awaitPicker()
+        compose.onNode(hasSetTextAction()).assertDoesNotExist()
+        compose.onNodeWithContentDescription("搜索文件").performClick()
         compose.onNode(hasSetTextAction()).performTextInput("guide")
         compose.onNodeWithText("notes.md").assertDoesNotExist()
+        snapshot("file-picker-search-expanded-v14")
+        compose.onNodeWithContentDescription("收起文件搜索").performClick()
+        compose.onNode(hasSetTextAction()).assertDoesNotExist()
+        compose.onNodeWithText("notes.md").assertIsDisplayed()
+        compose.onNodeWithContentDescription("搜索文件").performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("guide")
         compose.onNodeWithText("guide.md").performClick();awaitLoad()
         assertNull(model.state.value.filePicker)
         assertEquals("docs/guide.md",model.state.value.document!!.path)
         assertEquals(RepoTab.READ,model.state.value.tab)
         openPicker()
         assertEquals("docs",model.state.value.filePicker!!.directory)
+        compose.onNode(hasSetTextAction()).assertDoesNotExist()
         compose.onNodeWithText("正在阅读").assertIsDisplayed()
     }
     @Test fun pickerFailureAndRetryStayInsideThePanel() {
@@ -153,14 +196,59 @@ class FilePickerUiTest {
         assertTrue(model.state.value.immersive)
         assertEquals("docs/guide.md",model.state.value.document!!.path)
     }
-    @Test fun topFilesTabStillOpensTheFullBrowser() {
-        compose.onNodeWithText("文件").performClick();awaitLoad()
+    @Test fun internalFullDirectoryBrowserStillNavigatesWithoutATopTab() {
+        compose.onNodeWithText("文件").assertDoesNotExist()
+        compose.runOnIdle{model.loadDirectory("")};awaitLoad()
         assertEquals(RepoTab.FILES,model.state.value.tab)
         assertNull(model.state.value.filePicker)
+        compose.onNode(hasSetTextAction()).assertDoesNotExist()
+        compose.onNodeWithContentDescription("搜索文件").performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("READ")
+        compose.onNodeWithText("docs").assertDoesNotExist()
+        compose.onNodeWithContentDescription("收起文件搜索").performClick()
         compose.onNodeWithText("docs").performClick();awaitLoad()
         assertEquals("docs",model.state.value.directory)
         compose.onNodeWithText("guide.md").performClick();awaitLoad()
         assertEquals("docs/guide.md",model.state.value.document!!.path)
+    }
+    @Test fun repositoryDefaultsToReadingAndIssuesIsAnOnDemandHeaderAction() {
+        assertEquals(RepoTab.READ,model.state.value.tab)
+        compose.onNodeWithText("阅读").assertDoesNotExist()
+        compose.onNodeWithText("文件").assertDoesNotExist()
+        compose.onNodeWithText("Issues").assertDoesNotExist()
+        compose.onNodeWithText(" 文件").assertIsDisplayed()
+        compose.onNodeWithContentDescription("查看 Issues").assertDoesNotExist()
+        compose.onNodeWithText("main").assertDoesNotExist()
+        snapshotHeader("repository-single-line-header-v6",compose.onNodeWithText("README.md").fetchSemanticsNode().boundsInRoot.bottom+12)
+        val original=model.state.value.document!!
+        compose.runOnIdle{model.progress(original.key,.6f)}
+        compose.onNodeWithText("源码").performClick()
+        compose.onNodeWithContentDescription("更多仓库操作").performClick()
+        compose.onNodeWithText("当前分支：main").assertIsDisplayed()
+        compose.onNodeWithText("切换分支").assertIsDisplayed()
+        snapshot("repository-more-actions-v6")
+        compose.onNodeWithText("查看 Issues").performClick();awaitLoad()
+        assertEquals(RepoTab.ISSUES,model.state.value.tab)
+        compose.onNodeWithText("Issues").assertIsDisplayed()
+        compose.onNodeWithText("还没有讨论。").assertIsDisplayed()
+        snapshotHeader("repository-issues-header-v5",compose.onNodeWithText("Open").fetchSemanticsNode().boundsInRoot.bottom+12)
+        compose.onNodeWithContentDescription("返回").performClick()
+        assertEquals(RepoTab.READ,model.state.value.tab)
+        assertSame(original,model.state.value.document)
+        assertTrue(model.state.value.raw)
+        assertEquals(.6f,model.state.value.progress,.001f)
+        openPicker()
+        compose.onNodeWithText("选择文件").assertIsDisplayed()
+        assertEquals(RepoTab.READ,model.state.value.tab)
+    }
+    @Test fun branchSwitchIsAvailableFromRepositoryMoreAndReturnsToReading() {
+        compose.onNodeWithContentDescription("更多仓库操作").performClick()
+        compose.onNodeWithText("切换分支").performClick();awaitLoad()
+        compose.onNodeWithText("feature/reading").performClick();awaitLoad()
+        assertEquals("feature/reading",model.state.value.ref)
+        assertEquals("feature/reading",model.state.value.document!!.ref)
+        assertEquals(RepoTab.READ,model.state.value.tab)
+        compose.onNodeWithContentDescription("更多仓库操作").assertIsDisplayed()
     }
     @Test fun closingWhileLoadingCancelsLateResultsWithoutChangingTheReader() {
         val original=model.state.value.document

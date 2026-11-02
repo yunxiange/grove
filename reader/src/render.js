@@ -57,6 +57,44 @@ export function sanitizeMarkdown(html, purifier) {
   });
 }
 
+export function renderEpub(root,source,base,purifier) {
+  const url=new URL(base),prefix=url.pathname.match(/^\/epub\/[^/]+\//)?.[0];
+  if(!prefix)throw Error('Invalid EPUB resource root');
+  const bookRoot=url.origin+prefix;
+  // Rewrite resources in inert template content before attaching any image to the
+  // live document, so an EPUB cannot trigger remote tracking requests on open.
+  const template=root.ownerDocument.createElement('template');
+  template.innerHTML=sanitizeMarkdown(source,purifier);
+  const content=template.content;
+  content.querySelectorAll('base,link,meta,audio,video,source,track').forEach(node=>node.remove());
+  const localResource=value=>{
+    try{const resource=new URL(value,base);return resource.href.startsWith(bookRoot)?resource.href:null;}catch{return null;}
+  };
+  for(const img of content.querySelectorAll('img')){
+    const src=img.getAttribute('src')||'';
+    const local=localResource(src);
+    if(local)img.setAttribute('src',local);
+    else if(!/^data:image\/(png|jpeg|gif|webp);base64,/i.test(src))img.removeAttribute('src');
+  }
+  for(const node of content.querySelectorAll('image,use')){
+    const href=node.getAttribute('href')||node.getAttribute('xlink:href')||'';
+    if(!href.startsWith('#')){
+      const local=localResource(href);
+      if(local){node.removeAttributeNS('http://www.w3.org/1999/xlink','href');node.setAttribute('href',local);}
+      else node.remove();
+    }
+  }
+  for(const a of content.querySelectorAll('a[href]')){
+    try{
+      const href=new URL(a.getAttribute('href'),base);
+      if(href.href.startsWith(bookRoot))a.setAttribute('href',href.pathname===url.pathname&&href.hash?href.hash:href.href);
+      else if(href.protocol==='https:'||href.protocol==='http:')a.setAttribute('href',href.href);
+      else a.removeAttribute('href');
+    }catch{a.removeAttribute('href');}
+  }
+  root.replaceChildren(content);
+}
+
 // Typeset only after sanitizing author HTML, so required KaTeX positioning styles
 // survive without admitting untrusted inline styles from repository content.
 export function renderMath(root) {

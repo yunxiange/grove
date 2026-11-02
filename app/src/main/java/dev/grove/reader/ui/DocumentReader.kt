@@ -29,6 +29,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.ByteArrayInputStream
 import dev.grove.reader.domain.PreviewKind
+import dev.grove.reader.data.EpubArchive
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -38,7 +39,7 @@ fun DocumentReader(document: Document,fontSize: Int,warm: Boolean,initialProgres
     onImage:(String)->Unit=onLink,
     imageResource:((Document,String)->Pair<String,ByteArray>?)?=null,
     onImageLongPress:((Document,String)->Unit)?=null,
-    endPage:Int?=null,onEnd:(()->Unit)?=null,diagnostics:PreviewDiagnostics?=null) {
+    endPage:Int?=null,onEnd:(()->Unit)?=null,diagnostics:PreviewDiagnostics?=null,onPageSwipe:((Int)->Unit)?=null) {
     val link by rememberUpdatedState(onLink)
     val progressCallback by rememberUpdatedState(onProgress)
     val headingsCallback by rememberUpdatedState(onHeadings)
@@ -49,20 +50,30 @@ fun DocumentReader(document: Document,fontSize: Int,warm: Boolean,initialProgres
     val endCallback by rememberUpdatedState(onEnd)
     val currentEndPage by rememberUpdatedState(endPage)
     val currentDiagnostics by rememberUpdatedState(diagnostics)
+    val swipeCallback by rememberUpdatedState(onPageSwipe)
     var previewError by remember(document.key){mutableStateOf<String?>(null)}
     var attempt by remember{mutableIntStateOf(0)}
     val showError by rememberUpdatedState<(String)->Unit>({previewError=it})
     // Reading position is restored only when the document changes, not after every scroll event.
     val initial = remember(document.key) { initialProgress }
-    val payload=remember(document,fontSize,warm,endPage) { JSONObject().put("id",document.key).put("content",document.content)
+    val payload=remember(document,fontSize,warm,endPage,onPageSwipe!=null) { JSONObject().put("id",document.key).put("content",document.content)
         .put("url",document.url).put("fontSize",fontSize).put("warm",warm).put("progress",initial.toDouble())
         .put("kind",document.attachment?.kind?.name?.lowercase()?:"markdown").put("endPage",endPage?:JSONObject.NULL)
+        .put("swipePages",onPageSwipe!=null)
         .put("attachmentMimeType",document.attachment?.mimeType?:"")
         .put("attachmentUrl",document.attachment?.let{"https://appassets.androidplatform.net/attachment/"+File(it.localPath).name}?:"").toString() }
     Box(modifier) {
     key(attempt) {
     AndroidView(modifier=Modifier.fillMaxSize(),factory={context->
         val loader=WebViewAssetLoader.Builder().addPathHandler("/assets/",WebViewAssetLoader.AssetsPathHandler(context))
+            .addPathHandler("/epub/"){path->
+                val attachment=currentDocument.attachment
+                val file=attachment?.let{File(it.localPath)}
+                val resource=if(attachment?.kind==PreviewKind.EPUB&&file!=null&&path.startsWith(file.name+"/"))
+                    runCatching{EpubArchive.resource(file,path.removePrefix(file.name+"/"))}.getOrNull() else null
+                if(resource!=null)WebResourceResponse(resource.first,null,200,"OK",mapOf("Cache-Control" to "no-store"),ByteArrayInputStream(resource.second))
+                else WebResourceResponse("text/plain","utf-8",404,"Not Found",emptyMap(),ByteArrayInputStream(ByteArray(0)))
+            }
             .addPathHandler("/attachment/"){path->
                 val attachment=currentDocument.attachment
                 val file=attachment?.let{File(it.localPath)}
@@ -112,7 +123,10 @@ fun DocumentReader(document: Document,fontSize: Int,warm: Boolean,initialProgres
                 @JavascriptInterface fun copyCode(text:String) {post {
                     (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("代码",text))
                 }}
-                @JavascriptInterface fun progress(id:String,value:Float) {post {progressCallback(id,value)}}
+                @JavascriptInterface fun progress(id:String,value:Float) {post {if(id==currentDocument.key)progressCallback(id,value)}}
+                @JavascriptInterface fun swipePage(id:String,direction:Int) {post {
+                    if(id==currentDocument.key&&currentDocument.attachment?.kind==PreviewKind.EPUB&&(direction==1||direction == -1))swipeCallback?.invoke(direction)
+                }}
                 @JavascriptInterface fun reachedEnd(id:String,page:Int) {post {
                     if(id==currentDocument.key&&page==currentEndPage&&lastEnd!=(id to page)) {
                         lastEnd=id to page;endCallback?.invoke()

@@ -11,8 +11,8 @@ android {
         applicationId = "dev.grove.reader"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.4.1"
+        versionCode = 12
+        versionName = "0.4.2"
         buildConfigField("String", "GITHUB_CLIENT_ID", "\"${providers.gradleProperty("grove.githubClientId").orElse("").get()}\"")
         buildConfigField("String", "GITHUB_APP_SLUG", "\"${providers.gradleProperty("grove.githubAppSlug").orElse("").get()}\"")
     }
