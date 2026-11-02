@@ -1,5 +1,5 @@
 import DOMPurify from 'dompurify';
-import { createRenderer, normalizeLinks, sanitizeMarkdown, renderMath, renderEpub } from './render.js';
+import { createRenderer, normalizeLinks, sanitizeMarkdown, renderMath, renderEpub, layoutTables } from './render.js';
 import {createEndObserver} from './scroll.js';
 import {installChapterSwipe} from './swipe.js';
 const md=createRenderer();
@@ -92,16 +92,9 @@ const renderDocument=async payload=>{
   }
   if(payload.kind==='epub')renderEpub(article,payload.content,payload.url,DOMPurify);
   else article.innerHTML=sanitizeMarkdown(md.render(payload.content),DOMPurify);
-  // Keep the table's intrinsic column widths independent of the phone viewport.
-  // Constraining the table itself squeezes CJK cells down to a few characters.
-  for(const table of article.querySelectorAll('table')) {
-    const scroll=document.createElement('div');
-    scroll.className='table-scroll';scroll.tabIndex=0;
-    scroll.setAttribute('role','region');scroll.setAttribute('aria-label','表格');
-    table.before(scroll);scroll.append(table);
-  }
   renderMath(article);
   const headings=payload.kind==='epub'?[]:normalizeLinks(article,payload.url);
+  layoutTables(article);
   document.querySelectorAll('pre:not(.mermaid)').forEach(pre=>{
     const header=document.createElement('div');header.className='code-header';
     const language=pre.querySelector('code')?.className.replace('language-','')||'code';

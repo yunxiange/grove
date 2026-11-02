@@ -57,6 +57,32 @@ export function sanitizeMarkdown(html, purifier) {
   });
 }
 
+// An image/link collection uses cells as independent items, unlike a data table.
+// Require a single linked image per cell and no headers or spanning cells before
+// allowing items to flow onto another row. Repository paths play no role here.
+export function layoutTables(root) {
+  for(const table of root.querySelectorAll('table')) {
+    const cells=[...table.rows].flatMap(row=>[...row.cells]);
+    const gallery=!table.querySelector('th,thead,tfoot,caption,colgroup,table')&&cells.length>1&&cells.every(cell=>{
+      if(cell.colSpan!==1||cell.rowSpan!==1||cell.querySelectorAll('img').length!==1)return false;
+      const image=cell.querySelector('img'),links=[...cell.querySelectorAll('a[href]')];
+      return image.closest('a[href]')&&links.length>0&&new Set(links.map(a=>a.getAttribute('href'))).size===1;
+    });
+    table.classList.toggle('grove-media-grid',Boolean(gallery));
+    for(const cell of cells) {
+      const existing=cell.children.length===1&&cell.firstElementChild.classList.contains('grove-cell-content')?cell.firstElementChild:null;
+      if(gallery) {
+        if(existing)existing.replaceWith(...existing.childNodes);
+      }else if(!existing) {
+        // Let CSS intrinsic sizing use the actual font and content, rather than
+        // estimating character widths or recognizing particular column names.
+        const content=root.ownerDocument.createElement('div');
+        content.className='grove-cell-content';content.append(...cell.childNodes);cell.append(content);
+      }
+    }
+  }
+}
+
 export function renderEpub(root,source,base,purifier) {
   const url=new URL(base),prefix=url.pathname.match(/^\/epub\/[^/]+\//)?.[0];
   if(!prefix)throw Error('Invalid EPUB resource root');
