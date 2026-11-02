@@ -6,11 +6,12 @@ import createDOMPurify from 'dompurify';
 import {createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables} from '../src/render.js';
 import {createEndObserver} from '../src/scroll.js';
 import {installChapterSwipe} from '../src/swipe.js';
+import {installBackToTop} from '../src/back-to-top.js';
 
 test('renderer signals readiness after registration and reports image failures to native UI',async()=>{
  const dom=new JSDOM('<article></article>',{runScripts:'outside-only',pretendToBeVisual:true});
  const {window}=dom;const failures=[];let ready=false;
- Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables,createEndObserver,installChapterSwipe,DOMPurify:createDOMPurify(window)});
+ Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables,createEndObserver,installChapterSwipe,installBackToTop,DOMPurify:createDOMPurify(window)});
  window.Grove={readerReady(){assert.equal(typeof window.renderDocument,'function');ready=true;},headings(){},renderFailed(id){failures.push(id);}};
  const source=(await readFile(new URL('../src/main.js',import.meta.url),'utf8')).replace(/^import .*;$/gm,'');
  try {
@@ -26,7 +27,7 @@ test('standalone decoded image resets the old reading offset and requests a visi
  const {window}=dom;let offset=1200;const presented=[];
  Object.defineProperty(window,'scrollY',{get:()=>offset});
  window.scrollTo=(first,next)=>{offset=typeof first==='object'?first.top:next;};
- Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables,createEndObserver,installChapterSwipe,DOMPurify:createDOMPurify(window)});
+ Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables,createEndObserver,installChapterSwipe,installBackToTop,DOMPurify:createDOMPurify(window)});
  window.Grove={readerReady(){},headings(){},previewStatus(){},previewPresented(id){presented.push(id);}};
  const source=(await readFile(new URL('../src/main.js',import.meta.url),'utf8')).replace(/^import .*;$/gm,'');
  try {
@@ -53,7 +54,7 @@ test('SVG preview fills available width with proportional height and follows res
  const {window}=dom;
  Object.defineProperty(window,'innerWidth',{value:423,configurable:true});
  window.scrollTo=()=>{};
- Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables,createEndObserver,installChapterSwipe,DOMPurify:createDOMPurify(window)});
+ Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables,createEndObserver,installChapterSwipe,installBackToTop,DOMPurify:createDOMPurify(window)});
  const source=(await readFile(new URL('../src/main.js',import.meta.url),'utf8')).replace(/^import .*;$/gm,'');
  try {
   window.eval(source);

@@ -753,8 +753,11 @@ private fun formatCacheSize(bytes:Long):String=when {
     else if(s.raw&&doc.sourceTooLarge)Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp)) {
         Text("SVG 源码超过 1 MB，请返回预览，长按保存原文件后查看。",fontSize=12.sp,color=Muted,lineHeight=22.sp)
     }
-    else if(s.raw||(!doc.markdown&&doc.attachment==null))SelectionContainer(Modifier.weight(1f).fillMaxWidth().verticalScroll(sourceVertical).horizontalScroll(sourceHorizontal).padding(20.dp)) {
-        Text(doc.content,fontSize=12.sp,lineHeight=21.sp,fontFamily=FontFamily.Monospace)
+    else if(s.raw||(!doc.markdown&&doc.attachment==null))Box(Modifier.weight(1f).fillMaxWidth()) {
+        SelectionContainer(Modifier.fillMaxSize().verticalScroll(sourceVertical).horizontalScroll(sourceHorizontal).padding(20.dp)) {
+            Text(doc.content,fontSize=12.sp,lineHeight=21.sp,fontFamily=FontFamily.Monospace)
+        }
+        if(doc.attachment==null)ReaderBackToTop(sourceVertical)
     } else DocumentReader(doc,s.fontSize,s.warm,s.progress,onLink,model::progress,model::setHeadings,jump,Modifier.weight(1f).fillMaxWidth(),onImage=model::previewImage,imageResource=model::imageResource,onImageLongPress=model::showImageActions,diagnostics=previewDiagnostics.takeIf{s.previewDiagnosticsEnabled})
     if(doc.attachment?.kind!=PreviewKind.EPUB) {
     HorizontalDivider(color=Rule)

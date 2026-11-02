@@ -60,7 +60,10 @@ export function sanitizeMarkdown(html, purifier) {
 // An image/link collection uses cells as independent items, unlike a data table.
 // Require a single linked image per cell and no headers or spanning cells before
 // allowing items to flow onto another row. Repository paths play no role here.
+const tableCleanups=new WeakMap();
 export function layoutTables(root) {
+  tableCleanups.get(root)?.();
+  const dataTables=[];
   for(const table of root.querySelectorAll('table')) {
     const cells=[...table.rows].flatMap(row=>[...row.cells]);
     const gallery=!table.querySelector('th,thead,tfoot,caption,colgroup,table')&&cells.length>1&&cells.every(cell=>{
@@ -80,7 +83,51 @@ export function layoutTables(root) {
         content.className='grove-cell-content';content.append(...cell.childNodes);cell.append(content);
       }
     }
+    if(!gallery)dataTables.push(table);
   }
+  const view=root.ownerDocument.defaultView;
+  let active=true,frame=0,width=root.clientWidth;
+  const fit=()=>{
+    // Work from nested tables outwards, with fonts and content measured by the
+    // browser. Short values retain their full width; longer text may wrap down
+    // to a six-em reading width when that lets the whole table fit.
+    for(const table of [...dataTables].reverse()) {
+      const scroll=table.scrollLeft;
+      table.classList.remove('grove-fit-table');
+      if(!table.clientWidth||table.scrollWidth<=table.clientWidth)continue;
+      for(const cell of [...table.rows].flatMap(row=>[...row.cells])) {
+        const content=cell.querySelector(':scope > .grove-cell-content');
+        if(!content)continue;
+        const minimum=Math.min(content.getBoundingClientRect().width,parseFloat(view.getComputedStyle(content).fontSize)*6);
+        content.style.setProperty('--grove-cell-min',minimum+'px');
+      }
+      table.classList.add('grove-fit-table');
+      // A wide data table should stay readable instead of being squeezed into
+      // the screen. Only keep the wrapping layout if it actually fits fully.
+      if(table.scrollWidth>table.clientWidth)table.classList.remove('grove-fit-table');
+      table.scrollLeft=scroll;
+    }
+  };
+  const schedule=()=>{
+    if(!active||frame)return;
+    frame=view.requestAnimationFrame(()=>{frame=0;if(active)fit();});
+  };
+  fit();
+  const observer=dataTables.length&&view.ResizeObserver?new view.ResizeObserver(()=>{
+    if(root.clientWidth!==width){width=root.clientWidth;schedule();}
+  }):null;
+  if(dataTables.length) {
+    observer?.observe(root);
+    root.addEventListener('load',schedule,true);
+    root.ownerDocument.fonts?.ready.then(schedule);
+  }
+  const dispose=()=>{
+    active=false;observer?.disconnect();root.removeEventListener('load',schedule,true);
+    if(frame)view.cancelAnimationFrame(frame);
+    if(tableCleanups.get(root)===dispose)tableCleanups.delete(root);
+  };
+  tableCleanups.set(root,dispose);
+  return dispose;
 }
 
 export function renderEpub(root,source,base,purifier) {

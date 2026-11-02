@@ -2,12 +2,15 @@ import DOMPurify from 'dompurify';
 import { createRenderer, normalizeLinks, sanitizeMarkdown, renderMath, renderEpub, layoutTables } from './render.js';
 import {createEndObserver} from './scroll.js';
 import {installChapterSwipe} from './swipe.js';
+import {installBackToTop} from './back-to-top.js';
 const md=createRenderer();
 const article=document.querySelector('article');
 let active=null;
 let rendering=0;
 let scrollTimer;
 let contentReady=false;
+let disposeTableLayout=()=>{};
+const backToTop=installBackToTop(document,{getDocument:()=>contentReady?active:null});
 installChapterSwipe(document,{
   getDocument:()=>contentReady&&active?.kind==='epub'&&active.swipePages?active:null,
   onSwipe:(id,direction)=>window.Grove?.swipePage?.(id,direction)
@@ -32,7 +35,7 @@ const finishRender=(payload,generation,top,describe)=>{
   requestAnimationFrame(()=>{
     if(generation!==rendering)return;
     window.scrollTo({left:0,top:typeof top==='function'?top():top,behavior:'instant'});
-    contentReady=true;checkEnd();
+    contentReady=true;backToTop.update();checkEnd();
     requestAnimationFrame(()=>{
       if(generation!==rendering)return;
       if(describe)window.Grove?.previewStatus?.(payload.id,describe());
@@ -56,10 +59,12 @@ const renderDocument=async payload=>{
     requestAnimationFrame(()=>{if(generation===rendering)checkEnd();});return;
   }
   contentReady=false;
+  backToTop.update();
   updatePreviewViewport();
   document.documentElement.style.setProperty('--font-size',payload.fontSize+'px');
   document.body.classList.toggle('warm',payload.warm);
   document.body.classList.toggle('attachment-preview',payload.kind==='image'||payload.kind==='spreadsheet');
+  disposeTableLayout();disposeTableLayout=()=>{};
   article.replaceChildren();
   if(payload.kind==='image') {
     const image=document.createElement('img');image.className='preview-image';image.alt='图片预览';image.src=payload.attachmentUrl;
@@ -94,7 +99,7 @@ const renderDocument=async payload=>{
   else article.innerHTML=sanitizeMarkdown(md.render(payload.content),DOMPurify);
   renderMath(article);
   const headings=payload.kind==='epub'?[]:normalizeLinks(article,payload.url);
-  layoutTables(article);
+  disposeTableLayout=layoutTables(article);
   document.querySelectorAll('pre:not(.mermaid)').forEach(pre=>{
     const header=document.createElement('div');header.className='code-header';
     const language=pre.querySelector('code')?.className.replace('language-','')||'code';
@@ -141,6 +146,8 @@ window.addEventListener('scroll',()=>{
 window.addEventListener('resize',()=>{updatePreviewViewport();checkEnd();});
 window.renderDocument=payload=>renderDocument(payload).catch(()=>{
   if(active?.id!==payload.id)return;
+  contentReady=false;backToTop.update();
+  disposeTableLayout();disposeTableLayout=()=>{};
   article.textContent='预览加载失败，请重新加载。';
   window.Grove?.renderFailed?.(payload.id);
 });

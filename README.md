@@ -2,7 +2,7 @@
 
 一个偏爱阅读的 GitHub 客户端。用暖白纸面、紧凑排版和清晰导航，浏览项目、阅读文档、收藏值得再看的内容。
 
-**目前仅支持 Android 8.0+ · Kotlin + Jetpack Compose · 正式版 0.5.0**
+**目前仅支持 Android 8.0+ · Kotlin + Jetpack Compose · 正式版 0.5.1**
 
 <p align="center">
   <img src="docs/screenshots/overview.png" width="900" alt="Grove 产品界面：收藏搜索、最近访问、发现和个人页，四张实际页面叠放展示">
@@ -15,7 +15,7 @@
 | 场景 | 功能 |
 | --- | --- |
 | 阅读项目 | 默认阅读 README；阅读目录、字号、纸色与专注阅读；底部文件面板快捷切换文档，按需展开文件搜索；右上角更多切换分支或查看 Issues |
-| 阅读 Markdown | 内容自适应表格、长内容换行与横向滚动、封面书架自动排列；任务列表、代码高亮、Mermaid、KaTeX 公式与相对图片链接 |
+| 阅读 Markdown | 表格优先适宽、长内容换行，宽表格横向滚动；封面书架自动排列；任务列表、代码高亮、Mermaid、KaTeX 公式与相对图片链接；普通文档与源码支持快捷回到顶部 |
 | 查看附件 | 图片缩放与长按保存、SVG 预览 / 源码切换、PDF 分页与细步缩放、Excel / CSV 多工作表 |
 | 阅读电子书 | EPUB 2 / 3 目录、切章、字号与纸色；本章滚动进度和全书估算进度；PDF 左右滑动翻页、EPUB 左右滑动切章 |
 | 文件与缓存 | PDF / EPUB 下载进度、后台及熄屏下载、失败后重试续传；「我的 → 更多 → 缓存管理」查看大小、一键清理 |
@@ -28,8 +28,8 @@
 
 ## 下载
 
-- [下载 Android APK · v0.5.0](https://github.com/yunxiange/grove/releases/download/v0.5.0/Grove-0.5.0.apk)
-- [版本说明与附件](https://github.com/yunxiange/grove/releases/tag/v0.5.0) · [SHA-256 校验文件](https://github.com/yunxiange/grove/releases/download/v0.5.0/Grove-0.5.0-SHA256.txt)
+- [下载 Android APK · v0.5.1](https://github.com/yunxiange/grove/releases/download/v0.5.1/Grove-0.5.1.apk)
+- [版本说明与附件](https://github.com/yunxiange/grove/releases/tag/v0.5.1) · [SHA-256 校验文件](https://github.com/yunxiange/grove/releases/download/v0.5.1/Grove-0.5.1-SHA256.txt)
 
 提供不可调试的 Release APK，支持 Android 8.0+。为兼容已有安装，沿用此前版本的开发签名证书，可直接覆盖升级并保留本机记录；这与应用商店专用发布签名不同。此版本在 GitHub 正式发布，尚未上架应用商店。
 

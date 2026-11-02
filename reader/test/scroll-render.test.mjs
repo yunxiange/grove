@@ -6,6 +6,32 @@ import createDOMPurify from 'dompurify';
 import {createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,renderEpub,layoutTables} from '../src/render.js';
 import {createEndObserver} from '../src/scroll.js';
 import {installChapterSwipe} from '../src/swipe.js';
+import {installBackToTop} from '../src/back-to-top.js';
+
+test('table resize observers survive loading updates and are released when switching documents',async()=>{
+  const dom=new JSDOM('<article></article>',{runScripts:'outside-only',pretendToBeVisual:true});
+  const {window}=dom;const active=new Set();
+  window.ResizeObserver=class {
+    observe(){active.add(this);}
+    disconnect(){active.delete(this);}
+  };
+  window.scrollTo=()=>{};
+  Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,renderEpub,layoutTables,createEndObserver,installChapterSwipe,installBackToTop,DOMPurify:createDOMPurify(window)});
+  window.Grove={headings(){},progress(){}};
+  window.eval((await readFile(new URL('../src/main.js',import.meta.url),'utf8')).replace(/^import .*;$/gm,''));
+  const table={id:'table',kind:'markdown',content:'| 格式 | 支持 |\n| --- | --- |\n| PDF | 是 |',url:'https://example.com/README.md',fontSize:17,warm:false,progress:0};
+  const frame=()=>new Promise(resolve=>window.requestAnimationFrame(resolve));
+  try {
+    await window.renderDocument(table);await frame();assert.equal(active.size,1);
+    const observer=[...active][0];
+    await window.renderDocument({...table,endPage:2});await frame();
+    assert.equal(active.size,1);assert.equal([...active][0],observer);
+    await window.renderDocument({...table,id:'another'});await frame();
+    assert.equal(active.size,1);assert.notEqual([...active][0],observer);
+    await window.renderDocument({...table,id:'image',kind:'image',content:'',attachmentUrl:'https://example.com/image.png'});
+    assert.equal(active.size,0);
+  }finally{window.close();}
+});
 
 test('table layout is content driven across document paths and preserves Markdown links and EPUB content',async()=>{
   const dom=new JSDOM('<article></article>',{runScripts:'outside-only',pretendToBeVisual:true});
@@ -14,7 +40,7 @@ test('table layout is content driven across document paths and preserves Markdow
     const style=document.createElement('style');
     style.textContent=await readFile(new URL('../src/reader.css',import.meta.url),'utf8');document.head.append(style);
     window.scrollTo=()=>{};
-    Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables,renderEpub,createEndObserver,installChapterSwipe,DOMPurify:createDOMPurify(window)});
+    Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables,renderEpub,createEndObserver,installChapterSwipe,installBackToTop,DOMPurify:createDOMPurify(window)});
     window.Grove={headings(){},progress(){}};
     window.eval((await readFile(new URL('../src/main.js',import.meta.url),'utf8')).replace(/^import .*;$/gm,''));
     const content='| 书名 | 作者 |\n| --- | --- |\n| [示例书](./book.md) | 示例作者 |';
@@ -43,7 +69,7 @@ test('appending comments preserves absolute reading position and loading updates
   Object.defineProperty(window,'innerHeight',{value:700});
   Object.defineProperty(window.document.documentElement,'scrollHeight',{get:()=>700+article.textContent.length*10});
   window.scrollTo=(first,next)=>{y=Math.max(0,Math.min(typeof first==='object'?first.top:next,window.document.documentElement.scrollHeight-700));};
-  Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables,createEndObserver,installChapterSwipe,DOMPurify:createDOMPurify(window)});
+  Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables,createEndObserver,installChapterSwipe,installBackToTop,DOMPurify:createDOMPurify(window)});
   const calls=[];window.Grove={headings(){},reachedEnd:(...args)=>calls.push(args)};
   const script=(await readFile(new URL('../src/main.js',import.meta.url),'utf8')).replace(/^import .*;$/gm,'');
   window.eval(script);

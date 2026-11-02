@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
 import {installChapterSwipe} from '../src/swipe.js';
+import {installBackToTop} from '../src/back-to-top.js';
 import {readFile} from 'node:fs/promises';
 import createDOMPurify from 'dompurify';
 import {createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,renderEpub,layoutTables} from '../src/render.js';
@@ -74,7 +75,7 @@ test('disabled readers, stale gestures and cancellation never navigate',()=>{
 test('the actual reader enables the gesture only for ready EPUB pages with native navigation',async()=>{
   const dom=new JSDOM('<article></article>',{runScripts:'outside-only',pretendToBeVisual:true});
   const {window}=dom,calls=[];window.scrollTo=()=>{};
-  Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables,renderEpub,createEndObserver,installChapterSwipe,DOMPurify:createDOMPurify(window)});
+  Object.assign(window,{createRenderer,normalizeLinks,sanitizeMarkdown,renderMath,layoutTables,renderEpub,createEndObserver,installChapterSwipe,installBackToTop,DOMPurify:createDOMPurify(window)});
   window.Grove={headings(){},swipePage:(...args)=>calls.push(args)};
   const script=(await readFile(new URL('../src/main.js',import.meta.url),'utf8')).replace(/^import .*;$/gm,'');
   const swipe=()=>{
