@@ -275,7 +275,7 @@ class EpubAndCacheUiTest {
         store.saveBookmarks(listOf(bookmark));store.saveProgress(bookmark);store.recordVisit(bookmark.repo);store.fontSize=21
         app.cacheDir.resolve("github/attachments/book").apply{parentFile!!.mkdirs();writeBytes(ByteArray(1024))}
         compose.onNodeWithText("我的").performClick()
-        compose.onNodeWithContentDescription("更多功能").performClick()
+        compose.onNodeWithContentDescription("设置").performClick()
         compose.onNodeWithText("缓存管理").performClick()
         awaitText("1.0 KB")
         snapshot("cache-management")

@@ -71,7 +71,8 @@ class AttachmentLayoutTest {
         assertViewport()
         compose.onNodeWithContentDescription("预览诊断").assertDoesNotExist()
         compose.onNodeWithText("我的").performClick()
-        compose.onNodeWithContentDescription("更多功能").performClick()
+        compose.onNodeWithContentDescription("设置").performClick()
+        compose.onNodeWithText("关于 Grove").performClick()
         compose.onNodeWithText("开发者选项").performClick()
         compose.onNode(isToggleable()).assertIsOff()
         compose.runOnIdle {
@@ -83,7 +84,11 @@ class AttachmentLayoutTest {
         }
         compose.onNode(isToggleable()).performClick().assertIsOn()
         compose.runOnIdle{assertTrue(ReadingStore(app).previewDiagnosticsEnabled)}
-        compose.onNodeWithContentDescription("关闭开发者选项").performClick()
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.onNodeWithText("开发者选项").assertIsDisplayed()
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.onNodeWithText("阅读偏好").assertIsDisplayed()
+        compose.onNodeWithContentDescription("关闭个人设置").performClick()
         compose.onNodeWithText("足迹").performClick()
         compose.onNodeWithContentDescription("预览诊断").performClick()
         compose.onNodeWithText("复制诊断").assertIsDisplayed()
@@ -100,10 +105,11 @@ class AttachmentLayoutTest {
         compose.onNodeWithText("预览").performClick()
         assertViewport()
         compose.onNodeWithText("我的").performClick()
-        compose.onNodeWithContentDescription("更多功能").performClick()
+        compose.onNodeWithContentDescription("设置").performClick()
+        compose.onNodeWithText("关于 Grove").performClick()
         compose.onNodeWithText("开发者选项").performClick()
         compose.onNode(isToggleable()).assertIsOn().performClick().assertIsOff()
-        compose.onNodeWithContentDescription("关闭开发者选项").performClick()
+        compose.onNodeWithContentDescription("关闭个人设置").performClick()
         compose.onNodeWithText("足迹").performClick()
         compose.onNodeWithContentDescription("预览诊断").assertDoesNotExist()
         compose.runOnIdle{assertFalse(ReadingStore(app).previewDiagnosticsEnabled)}

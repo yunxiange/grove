@@ -1,6 +1,8 @@
 # 界面图
 
-`recent-projects.png`、`favorites-search.png`、`discovery.png`、`profile.png` 和 `profile-more.png` 来自 0.4.1 的 Compose / Robolectric 原生图形测试。
+`recent-projects.png`、`favorites-search.png`、`discovery.png` 和 `profile.png` 来自 0.4.1 的 Compose / Robolectric 原生图形测试。
+
+`profile-more.png` 已更新为 0.5.2 的个人设置首页：首层保留阅读偏好、缓存管理、仓库与账号、关于 Grove 四项；账号操作与开发者选项收进对应页面。
 
 `file-picker.png` 已更新为 0.5.0 的实际选文件面板：搜索默认收起，点击搜索图标展开；仓库标题为单行，分支与 Issues 位于右上角更多菜单。
 
@@ -12,6 +14,7 @@ README 使用 `overview.png` 展示四页叠放的效果，发现页置于前景
 
 ```sh
 ./gradlew :app:testDebugUnitTest --tests '*ProfileRepositoriesUiTest'
+cp app/build/reports/ui/profile-settings.png docs/screenshots/profile-more.png
 ./gradlew :app:testDebugUnitTest --tests 'dev.grove.reader.FilePickerUiTest.bottomFilesOpensPickerWhileKeepingReaderAndDocument'
 cp app/build/reports/ui/file-picker-search-collapsed-v14.png docs/screenshots/file-picker.png
 ```

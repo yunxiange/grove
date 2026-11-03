@@ -104,7 +104,6 @@ fun GroveApp(model:GroveViewModel) {
     var settings by remember {mutableStateOf(false)}
     var branches by remember {mutableStateOf(false)}
     var toc by remember {mutableStateOf(false)}
-    var about by remember {mutableStateOf(false)}
     var imports by remember {mutableStateOf(false)}
     var importing by remember {mutableStateOf(false)}
     var addedRepos by remember {mutableStateOf(false)}
@@ -146,7 +145,7 @@ fun GroveApp(model:GroveViewModel) {
                         Destination.LIBRARY -> LibraryPage(s,model,onAdd={add=true},onProjects={importing=false;imports=true})
                         Destination.SAVED -> SavedPage(s,model)
                         Destination.DISCOVER -> DiscoveryPage(s,model,discoveryListState,discoveryCategoryScroll)
-                        Destination.PROFILE -> ProfilePage(s,model,{settings=true},{about=true},{importing=false;imports=true},{addedRepos=true})
+                        Destination.PROFILE -> ProfilePage(s,model,{importing=false;imports=true},{addedRepos=true})
                     }
                 }
                 }
@@ -224,21 +223,14 @@ fun GroveApp(model:GroveViewModel) {
                 }
             }
         }
-        if(settings)ModalBottomSheet(onDismissRequest={settings=false},containerColor=Paper) {
-            Column(Modifier.fillMaxWidth().padding(24.dp),verticalArrangement=Arrangement.spacedBy(17.dp)) {
-                Text("阅读偏好",fontSize=20.sp,fontFamily=FontFamily.Serif)
-                Row(verticalAlignment=Alignment.CenterVertically) {
-                    Text("文字大小",Modifier.weight(1f),fontSize=13.sp)
-                    IconButton(onClick={model.settings(font=s.fontSize-1)}){Icon(Icons.Outlined.Remove,"缩小文字")}
-                    Text("${s.fontSize}",fontSize=14.sp)
-                    IconButton(onClick={model.settings(font=s.fontSize+1)}){Icon(Icons.Outlined.Add,"放大文字")}
-                }
-                Text("纸面颜色",fontSize=12.sp,color=Muted)
-                Row(horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                    FilterChip(selected=!s.warm,onClick={model.settings(warm=false)},label={Text("纸白")})
-                    FilterChip(selected=s.warm,onClick={model.settings(warm=true)},label={Text("暖纸")})
-                }
-                Spacer(Modifier.height(14.dp))
+        if(settings)ModalBottomSheet(onDismissRequest={settings=false},containerColor=Paper,tonalElevation=0.dp) {
+            CompactHeader("阅读偏好") {
+                IconButton(onClick={settings=false}){Icon(Icons.Outlined.Close,"关闭阅读偏好",Modifier.size(19.dp))}
+            }
+            HorizontalDivider(color=Rule)
+            Column(Modifier.fillMaxWidth().heightIn(max=480.dp).verticalScroll(rememberScrollState()).padding(horizontal=24.dp)) {
+                ReadingPreferencesContent(s,model)
+                Spacer(Modifier.height(24.dp))
             }
         }
         if(repositoryMore&&s.project!=null)ModalBottomSheet(onDismissRequest={repositoryMore=false},containerColor=Paper,tonalElevation=0.dp) {
@@ -271,7 +263,6 @@ fun GroveApp(model:GroveViewModel) {
                 Text(h.text,Modifier.fillMaxWidth().clickable {jump=h.id;toc=false}.padding(start=(24+(h.level-1)*10).dp,end=24.dp,top=14.dp,bottom=14.dp),fontSize=13.sp,color=if(h.level==1)Ink else Muted)
             }}
         }
-        if(about)AlertDialog(onDismissRequest={about=false},title={Text("关于 Grove",fontFamily=FontFamily.Serif)},text={Text("一座随身的开源图书馆。\n\n墨与纸 · ${BuildConfig.VERSION_NAME}\n\n仓库与讨论来自 GitHub。文档书签、阅读位置和偏好保存在本机。发现按累计 Star 或近 30 天新项目排序。",lineHeight=23.sp)},confirmButton={TextButton(onClick={about=false}){Text("知道了")}})
         if(s.authError!=null)AlertDialog(onDismissRequest=model::cancelLogin,title={Text("GitHub 登录")},text={Text(s.authError!!,lineHeight=24.sp)},confirmButton={TextButton(onClick=model::cancelLogin){Text("继续阅读")}})
         if(s.starError!=null)AlertDialog(onDismissRequest=model::clearStarError,title={Text("GitHub Star")},text={Text(s.starError!!,lineHeight=24.sp)},confirmButton={TextButton(onClick=model::clearStarError){Text("知道了")}})
         if(s.authDevice!=null)AlertDialog(onDismissRequest=model::cancelLogin,title={Text("授权 GitHub")},text={Column(verticalArrangement=Arrangement.spacedBy(15.dp)) {
@@ -567,62 +558,12 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
         trailingIcon={if(query.isNotEmpty())IconButton(onClick={onQuery("")}){Icon(Icons.Outlined.Close,clearLabel,Modifier.size(17.dp))}})
 }
 
-@Composable private fun ColumnScope.ProfilePage(s:GroveState,model:GroveViewModel,settings:()->Unit,about:()->Unit,projects:()->Unit,addedRepos:()->Unit) {
-    val context=LocalContext.current
-    var more by remember {mutableStateOf(false)}
-    var developerOptions by remember {mutableStateOf(false)}
-    var cacheManagement by remember {mutableStateOf(false)}
+@Composable private fun ColumnScope.ProfilePage(s:GroveState,model:GroveViewModel,projects:()->Unit,addedRepos:()->Unit) {
+    var showSettings by remember {mutableStateOf(false)}
     CompactHeader("我的") {
-        IconButton(onClick={more=true}){Icon(Icons.Outlined.MoreHoriz,"更多功能",Modifier.size(22.dp))}
+        IconButton(onClick={showSettings=true}){Icon(Icons.Outlined.Settings,"设置",Modifier.size(21.dp))}
     }
-    if(more)ModalBottomSheet(onDismissRequest={more=false},containerColor=Paper,tonalElevation=0.dp) {
-        CompactHeader("更多功能") {IconButton(onClick={more=false}){Icon(Icons.Outlined.Close,"关闭更多功能",Modifier.size(19.dp))}}
-        HorizontalDivider(color=Rule)
-        Column(Modifier.fillMaxWidth().heightIn(max=480.dp).verticalScroll(rememberScrollState()).padding(horizontal=24.dp)) {
-            MoreAction(Icons.Outlined.TextFields,"阅读偏好"){more=false;settings()}
-            MoreAction(Icons.Outlined.FolderOpen,"已添加的仓库"){more=false;addedRepos()}
-            MoreAction(Icons.Outlined.Storage,"缓存管理"){more=false;cacheManagement=true;model.refreshCacheSize()}
-            if(s.username.isNotBlank()&&BuildConfig.GITHUB_APP_SLUG.isNotBlank())MoreAction(Icons.Outlined.Lock,"仓库授权"){
-                more=false;contextOpen(context,"https://github.com/apps/${BuildConfig.GITHUB_APP_SLUG}/installations/new")
-            }
-            MoreAction(Icons.Outlined.Info,"关于 Grove"){more=false;about()}
-            MoreAction(Icons.Outlined.Code,"开发者选项"){more=false;developerOptions=true}
-            if(s.username.isNotBlank())MoreAction(Icons.AutoMirrored.Outlined.Logout,"退出登录"){more=false;model.logout()}
-            Spacer(Modifier.height(18.dp))
-        }
-    }
-    if(developerOptions)ModalBottomSheet(onDismissRequest={developerOptions=false},containerColor=Paper,tonalElevation=0.dp) {
-        CompactHeader("开发者选项") {IconButton(onClick={developerOptions=false}){Icon(Icons.Outlined.Close,"关闭开发者选项",Modifier.size(19.dp))}}
-        HorizontalDivider(color=Rule)
-        Column(Modifier.fillMaxWidth().padding(horizontal=24.dp)) {
-            Text("仅在排查预览显示问题时开启。",Modifier.padding(top=18.dp),fontSize=11.sp,color=Muted)
-            Row(Modifier.fillMaxWidth().toggleable(value=s.previewDiagnosticsEnabled,role=Role.Switch,onValueChange=model::setPreviewDiagnosticsEnabled).padding(vertical=20.dp),verticalAlignment=Alignment.CenterVertically) {
-                Column(Modifier.weight(1f).padding(end=16.dp),verticalArrangement=Arrangement.spacedBy(7.dp)) {
-                    Text("预览诊断",fontSize=13.sp,color=Ink)
-                    Text("在图片和表格预览页显示诊断入口",fontSize=10.sp,color=Muted)
-                }
-                Switch(checked=s.previewDiagnosticsEnabled,onCheckedChange=null,colors=SwitchDefaults.colors(
-                    checkedThumbColor=Paper,checkedTrackColor=Ink,checkedBorderColor=Ink,
-                    uncheckedThumbColor=Muted,uncheckedTrackColor=Paper,uncheckedBorderColor=Rule))
-            }
-            HorizontalDivider(color=Rule)
-            Spacer(Modifier.height(24.dp))
-        }
-    }
-    if(cacheManagement)ModalBottomSheet(onDismissRequest={cacheManagement=false},containerColor=Paper,tonalElevation=0.dp) {
-        CompactHeader("缓存管理") {IconButton(onClick={cacheManagement=false}){Icon(Icons.Outlined.Close,"关闭缓存管理",Modifier.size(19.dp))}}
-        HorizontalDivider(color=Rule)
-        Column(Modifier.fillMaxWidth().padding(24.dp),verticalArrangement=Arrangement.spacedBy(20.dp)) {
-            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-                Text("缓存大小",Modifier.weight(1f),fontSize=13.sp)
-                if(s.cacheBusy)CircularProgressIndicator(Modifier.size(16.dp),strokeWidth=1.dp,color=Muted)
-                else Text(s.cacheBytes?.let(::formatCacheSize)?:"—",fontSize=20.sp,fontFamily=FontFamily.Serif)
-            }
-            Text("清理临时文档和附件。登录状态、书签、足迹及阅读进度会保留；再次打开内容时会重新下载。",fontSize=11.sp,lineHeight=21.sp,color=Muted)
-            s.cacheMessage?.let{Text(it,fontSize=11.sp,color=Muted)}
-            Button(onClick=model::clearCache,enabled=!s.cacheBusy&&!s.authBusy&&(s.cacheBytes?:0)>0,modifier=Modifier.fillMaxWidth()){Text("一键清理")}
-        }
-    }
+    if(showSettings)ProfileSettingsSheet(s,model,onDismiss={showSettings=false},addedRepositories={showSettings=false;addedRepos()})
     HorizontalDivider(color=Rule)
     Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal=24.dp)) {
         Row(Modifier.fillMaxWidth().padding(vertical=23.dp),verticalAlignment=Alignment.CenterVertically) {
@@ -658,6 +599,103 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
             }
         }
         Text("阅读位置和文档书签保存在本机",Modifier.padding(top=26.dp,bottom=24.dp),fontSize=9.sp,color=Muted)
+    }
+}
+private enum class ProfilePanel(val title:String) {
+    SETTINGS("设置"),READING("阅读偏好"),ACCOUNT("仓库与账号"),ABOUT("关于 Grove"),DEVELOPER("开发者选项"),CACHE("缓存管理");
+    val parent:ProfilePanel? get()=when(this){SETTINGS->null;DEVELOPER->ABOUT;else->SETTINGS}
+}
+@Composable private fun ProfileSettingsSheet(s:GroveState,model:GroveViewModel,onDismiss:()->Unit,addedRepositories:()->Unit) {
+    val context=LocalContext.current
+    var panel by remember{mutableStateOf(ProfilePanel.SETTINGS)}
+    ModalBottomSheet(onDismissRequest=onDismiss,containerColor=Paper,tonalElevation=0.dp) {
+        CompactHeader(panel.title,onBack=panel.parent?.let{parent->{panel=parent}}) {
+            IconButton(onClick=onDismiss){Icon(Icons.Outlined.Close,"关闭个人设置",Modifier.size(19.dp))}
+        }
+        HorizontalDivider(color=Rule)
+        key(panel) {
+        Column(Modifier.fillMaxWidth().heightIn(max=480.dp).verticalScroll(rememberScrollState()).padding(horizontal=24.dp)) {
+            when(panel) {
+                ProfilePanel.SETTINGS -> {
+                    MoreAction(Icons.Outlined.TextFields,"阅读偏好"){panel=ProfilePanel.READING}
+                    MoreAction(Icons.Outlined.Storage,"缓存管理"){panel=ProfilePanel.CACHE;model.refreshCacheSize()}
+                    MoreAction(Icons.Outlined.PersonOutline,"仓库与账号"){panel=ProfilePanel.ACCOUNT}
+                    MoreAction(Icons.Outlined.Info,"关于 Grove"){panel=ProfilePanel.ABOUT}
+                }
+                ProfilePanel.READING -> ReadingPreferencesContent(s,model)
+                ProfilePanel.ACCOUNT -> {
+                    Row(Modifier.fillMaxWidth().padding(vertical=20.dp),verticalAlignment=Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                            Text(s.username.ifBlank{"访客"},fontSize=19.sp,fontFamily=FontFamily.Serif)
+                            Text(if(s.username.isBlank())"尚未连接 GitHub"else"已连接 GitHub",fontSize=10.sp,color=Muted)
+                        }
+                        if(s.username.isBlank())TextButton(onClick={onDismiss();model.login()},enabled=!s.authBusy) {
+                            Text(if(s.authBusy)"授权中…"else"登录 GitHub",fontSize=11.sp)
+                        }
+                    }
+                    HorizontalDivider(color=Rule)
+                    MoreAction(Icons.Outlined.FolderOpen,"已添加的仓库",action=addedRepositories)
+                    if(s.username.isNotBlank()&&BuildConfig.GITHUB_APP_SLUG.isNotBlank())MoreAction(Icons.Outlined.Lock,"仓库授权") {
+                        contextOpen(context,"https://github.com/apps/${BuildConfig.GITHUB_APP_SLUG}/installations/new")
+                    }
+                    if(s.username.isNotBlank())TextButton(onClick={onDismiss();model.logout()},
+                        modifier=Modifier.fillMaxWidth().padding(top=16.dp),colors=ButtonDefaults.textButtonColors(contentColor=Muted)) {
+                        Text("退出登录",fontSize=12.sp)
+                    }
+                }
+                ProfilePanel.ABOUT -> {
+                    Text("Grove · 墨与纸",Modifier.padding(top=24.dp),fontSize=22.sp,fontFamily=FontFamily.Serif)
+                    Text("版本 ${BuildConfig.VERSION_NAME}",Modifier.padding(top=8.dp),fontSize=11.sp,color=Muted)
+                    Text("一座随身的开源图书馆。",Modifier.padding(top=20.dp),fontSize=13.sp)
+                    Text("仓库与讨论来自 GitHub。文档书签、阅读位置和偏好保存在本机。发现按累计 Star 或近 30 天新项目排序。",
+                        Modifier.padding(top=10.dp,bottom=24.dp),fontSize=11.sp,lineHeight=21.sp,color=Muted)
+                    HorizontalDivider(color=Rule)
+                    MoreAction(Icons.Outlined.Code,"开发者选项"){panel=ProfilePanel.DEVELOPER}
+                }
+                ProfilePanel.DEVELOPER -> {
+                    Text("仅在排查预览显示问题时开启。",Modifier.padding(top=18.dp),fontSize=11.sp,color=Muted)
+                    Row(Modifier.fillMaxWidth().toggleable(value=s.previewDiagnosticsEnabled,role=Role.Switch,onValueChange=model::setPreviewDiagnosticsEnabled).padding(vertical=20.dp),verticalAlignment=Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).padding(end=16.dp),verticalArrangement=Arrangement.spacedBy(7.dp)) {
+                            Text("预览诊断",fontSize=13.sp,color=Ink)
+                            Text("在图片和表格预览页显示诊断入口",fontSize=10.sp,color=Muted)
+                        }
+                        Switch(checked=s.previewDiagnosticsEnabled,onCheckedChange=null,colors=SwitchDefaults.colors(
+                            checkedThumbColor=Paper,checkedTrackColor=Ink,checkedBorderColor=Ink,
+                            uncheckedThumbColor=Muted,uncheckedTrackColor=Paper,uncheckedBorderColor=Rule))
+                    }
+                    HorizontalDivider(color=Rule)
+                }
+                ProfilePanel.CACHE -> {
+                    Column(Modifier.padding(top=24.dp),verticalArrangement=Arrangement.spacedBy(20.dp)) {
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                            Text("缓存大小",Modifier.weight(1f),fontSize=13.sp)
+                            if(s.cacheBusy)CircularProgressIndicator(Modifier.size(16.dp),strokeWidth=1.dp,color=Muted)
+                            else Text(s.cacheBytes?.let(::formatCacheSize)?:"—",fontSize=20.sp,fontFamily=FontFamily.Serif)
+                        }
+                        Text("清理临时文档和附件。登录状态、书签、足迹及阅读进度会保留；再次打开内容时会重新下载。",fontSize=11.sp,lineHeight=21.sp,color=Muted)
+                        s.cacheMessage?.let{Text(it,fontSize=11.sp,color=Muted)}
+                        Button(onClick=model::clearCache,enabled=!s.cacheBusy&&!s.authBusy&&(s.cacheBytes?:0)>0,modifier=Modifier.fillMaxWidth()){Text("一键清理")}
+                    }
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+        }
+    }
+}
+@Composable private fun ReadingPreferencesContent(s:GroveState,model:GroveViewModel) {
+    Column(Modifier.fillMaxWidth().padding(top=20.dp),verticalArrangement=Arrangement.spacedBy(17.dp)) {
+        Row(verticalAlignment=Alignment.CenterVertically) {
+            Text("文字大小",Modifier.weight(1f),fontSize=13.sp)
+            IconButton(onClick={model.settings(font=s.fontSize-1)}){Icon(Icons.Outlined.Remove,"缩小文字")}
+            Text("${s.fontSize}",fontSize=14.sp)
+            IconButton(onClick={model.settings(font=s.fontSize+1)}){Icon(Icons.Outlined.Add,"放大文字")}
+        }
+        Text("纸面颜色",fontSize=12.sp,color=Muted)
+        Row(horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+            FilterChip(selected=!s.warm,onClick={model.settings(warm=false)},label={Text("纸白")})
+            FilterChip(selected=s.warm,onClick={model.settings(warm=true)},label={Text("暖纸")})
+        }
     }
 }
 @Composable private fun MoreAction(icon:ImageVector,title:String,action:()->Unit) {

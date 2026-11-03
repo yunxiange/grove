@@ -102,12 +102,22 @@ class ProfileRepositoriesUiTest {
         compose.onNodeWithText("阅读偏好").assertDoesNotExist()
         compose.onNodeWithText("仓库授权").assertDoesNotExist()
         snapshot("profile")
-        compose.onNodeWithContentDescription("更多功能").performClick()
-        snapshot("profile-more")
+        compose.onNodeWithContentDescription("设置").performClick()
+        snapshot("profile-settings")
         compose.onNodeWithText("阅读偏好").assertIsDisplayed()
-        compose.onNodeWithText("仓库授权").assertIsDisplayed()
+        compose.onNodeWithText("缓存管理").assertIsDisplayed()
+        compose.onNodeWithText("仓库与账号").assertIsDisplayed()
+        compose.onNodeWithText("仓库授权").assertDoesNotExist()
+        compose.onNodeWithText("已添加的仓库").assertDoesNotExist()
+        compose.onNodeWithText("退出登录").assertDoesNotExist()
+        compose.onNodeWithText("开发者选项").assertDoesNotExist()
         compose.onNodeWithText("关于 Grove").performClick()
-        compose.onNodeWithText("知道了").performClick()
+        compose.onNodeWithText("版本 ${BuildConfig.VERSION_NAME}").assertIsDisplayed()
+        compose.onNodeWithText("开发者选项").assertIsDisplayed()
+        snapshot("profile-about")
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.onNodeWithText("阅读偏好").assertIsDisplayed()
+        compose.onNodeWithContentDescription("关闭个人设置").performClick()
         compose.onNodeWithText("文档书签").performClick()
         compose.onNodeWithText("文档书签 1").assertIsSelected()
         compose.onNodeWithText("README.md").assertIsDisplayed()
@@ -117,6 +127,71 @@ class ProfileRepositoriesUiTest {
         compose.onNodeWithText("没有匹配的书签。").assertIsDisplayed()
         compose.onNodeWithContentDescription("清除收藏搜索").performClick()
         compose.onNodeWithText("README.md").assertIsDisplayed()
+    }
+    @Test fun readingPreferencesReturnToSettingsAndKeepChanges() {
+        compose.runOnIdle{model.navigate(Destination.PROFILE)}
+        val originalFont=model.state.value.fontSize
+        compose.onNodeWithContentDescription("设置").performClick()
+        compose.onNodeWithText("阅读偏好").performClick()
+        compose.onNodeWithText("文字大小").assertIsDisplayed()
+        compose.onNodeWithContentDescription("放大文字").performClick()
+        compose.onNodeWithText("暖纸").performClick().assertIsSelected()
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.onNodeWithText("缓存管理").assertIsDisplayed()
+        compose.onNodeWithText("仓库与账号").assertIsDisplayed()
+        compose.onNodeWithText("文字大小").assertDoesNotExist()
+        compose.onNodeWithText("阅读偏好").performClick()
+        compose.onNodeWithText("暖纸").assertIsSelected()
+        compose.onNodeWithText("${originalFont+1}").assertIsDisplayed()
+        snapshot("profile-reading-preferences")
+        compose.onNodeWithContentDescription("关闭个人设置").performClick()
+        compose.onNodeWithText("我的项目").assertIsDisplayed()
+        compose.onNodeWithText("文字大小").assertDoesNotExist()
+        compose.runOnIdle {
+            assertEquals(originalFont+1,ReadingStore(app,"100").fontSize)
+            assertTrue(ReadingStore(app,"100").warm)
+        }
+    }
+    @Test fun readerPreferencesCloseBackToTheSameDocument() {
+        open("alpha")
+        val key=model.state.value.document!!.key
+        compose.onNodeWithContentDescription("阅读设置").performClick()
+        compose.onNodeWithText("文字大小").assertIsDisplayed()
+        snapshot("reader-reading-preferences")
+        compose.onNodeWithContentDescription("关闭阅读偏好").performClick()
+        compose.onNodeWithText("文字大小").assertDoesNotExist()
+        compose.onNodeWithContentDescription("阅读设置").assertIsDisplayed()
+        compose.runOnIdle{assertEquals(key,model.state.value.document!!.key)}
+    }
+    @Test fun accountActionsStayTogetherAndLogoutClosesTheSettingsSheet() {
+        compose.runOnIdle{model.navigate(Destination.PROFILE)}
+        compose.onNodeWithContentDescription("设置").performClick()
+        compose.onNodeWithText("仓库与账号").performClick()
+        compose.onNodeWithText("已添加的仓库").assertIsDisplayed()
+        compose.onNodeWithText("仓库授权").assertIsDisplayed()
+        compose.onNodeWithText("退出登录").assertIsDisplayed()
+        compose.onNodeWithText("阅读偏好").assertDoesNotExist()
+        compose.onNodeWithText("开发者选项").assertDoesNotExist()
+        snapshot("profile-account")
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.onNodeWithText("仓库授权").assertDoesNotExist()
+        compose.onNodeWithText("仓库与账号").performClick()
+        compose.onNodeWithText("退出登录").performClick()
+        compose.runOnIdle{assertEquals("",model.state.value.username)}
+        compose.onNodeWithContentDescription("关闭个人设置").assertDoesNotExist()
+        compose.onNodeWithContentDescription("设置").assertIsDisplayed()
+    }
+    @Test fun guestAccountSettingsKeepLocalRepositoriesWithoutShowingAuthorizationOrLogout() {
+        compose.runOnIdle{model.logout();model.navigate(Destination.PROFILE)}
+        compose.onNodeWithContentDescription("设置").performClick()
+        compose.onNodeWithText("仓库与账号").performClick()
+        compose.onNodeWithText("已添加的仓库").assertIsDisplayed()
+        compose.onNodeWithText("尚未连接 GitHub").assertIsDisplayed()
+        compose.onNodeWithText("仓库授权").assertDoesNotExist()
+        compose.onNodeWithText("退出登录").assertDoesNotExist()
+        compose.onNodeWithText("已添加的仓库").performClick()
+        compose.onNodeWithText("还没有手动添加的仓库。").assertIsDisplayed()
+        compose.onNodeWithContentDescription("关闭个人设置").assertDoesNotExist()
     }
     @Test fun myProjectsShowsAccountRepositoriesAndOpeningOneRecordsARecentVisit() {
         compose.runOnIdle{model.navigate(Destination.PROFILE)}
