@@ -16,10 +16,13 @@ await writeFile(out + '/THIRD_PARTY.txt', [
   'markdown-it (MIT), DOMPurify (Apache-2.0 OR MPL-2.0), highlight.js (BSD-3-Clause),',
   'Mermaid (MIT), KaTeX (MIT), markdown-it-texmath (MIT), markdown-it-task-lists (ISC),',
   'markdown-it-cjk-friendly (MIT), get-east-asian-width (MIT).',
+  'Foliate JS MOBI parser (MIT), revision 78914aef4466eb960965702401634c2cb348e9b1.',
   'Exact versions are recorded in reader/package-lock.json. Bundled JS license notices are retained.'
 ].join('\n'));
 await mkdir(out+'/licenses',{recursive:true});
+await cp('vendor/foliate-js/LICENSE',out+'/licenses/foliate-js-MIT.txt');
 const licenses=[];
+licenses.push({name:'foliate-js/mobi',version:'78914aef4466eb960965702401634c2cb348e9b1',license:'MIT',source:'https://github.com/johnfactotum/foliate-js'});
 async function collect(dir) {
   for(const entry of await readdir(dir,{withFileTypes:true})) {
     if(!entry.isDirectory() || entry.name.startsWith('.'))continue;

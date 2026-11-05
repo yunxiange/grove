@@ -22,10 +22,11 @@ class ResumableDownloadTest {
     private fun blobSha(bytes:ByteArray)=MessageDigest.getInstance("SHA-1").apply{
         update("blob ${bytes.size}\u0000".toByteArray());update(bytes)
     }.digest().joinToString(""){"%02x".format(it)}
-    private fun exercise(ignoreRange:Boolean=false,changedRevision:Boolean=false,badRange:Boolean=false,downloadUrl:String?=null) = runBlocking {
+    private fun exercise(ignoreRange:Boolean=false,changedRevision:Boolean=false,badRange:Boolean=false,downloadUrl:String?=null,extension:String="pdf") = runBlocking {
         val root=Files.createTempDirectory("grove-resume").toFile()
         try {
-            val original=PdfFixture.write(root.resolve("source.pdf"),200_000).readBytes()
+            val original=if(extension=="pdf")PdfFixture.write(root.resolve("source.pdf"),200_000).readBytes()else
+                listOf(File("../reader/fixtures/mobi/alice.$extension"),File("reader/fixtures/mobi/alice.$extension")).first{it.isFile}.readBytes()
             val replacement=PdfFixture.write(root.resolve("replacement.pdf"),210_000).readBytes()
             var version=original;var rawCalls=0;val ranges=mutableListOf<String?>();val cutoff=65536
             val api=GitHubClient(root.resolve("cache"),token={"test"},connectionFactory={url->object:HttpURLConnection(url){
@@ -42,7 +43,7 @@ class ResumableDownloadTest {
                 override fun getHeaderField(name:String):String?=if(name.equals("Content-Range",true)&&number>1&&offset()>0)
                     "bytes ${if(badRange)cutoff+1 else cutoff}-${version.lastIndex}/${version.size}" else null
                 override fun getInputStream():InputStream {
-                    if(!raw)return JSONObject().put("path","guide.pdf").put("size",version.size).put("sha",blobSha(version)).put("encoding","none").put("download_url",downloadUrl).toString().byteInputStream()
+                    if(!raw)return JSONObject().put("path","guide.$extension").put("size",version.size).put("sha",blobSha(version)).put("encoding","none").put("download_url",downloadUrl).toString().byteInputStream()
                     assertEquals("api.github.com",url.host)
                     if(number==1)return object:InputStream(){
                         var position=0
@@ -55,12 +56,12 @@ class ResumableDownloadTest {
                     return version.inputStream().apply{skip(offset().toLong())}
                 }
             }})
-            try{api.document(RepoId("owner","repo"),"main","guide.pdf");fail("第一次下载应失败")}
+            try{api.document(RepoId("owner","repo"),"main","guide.$extension");fail("第一次下载应失败")}
             catch(_:GitHubException){}
             assertEquals(cutoff.toLong(),root.resolve("cache").walkTopDown().single{it.extension=="part"}.length())
             if(changedRevision)version=replacement
             val progress=mutableListOf<FileDownloadProgress>()
-            val doc=api.document(RepoId("owner","repo"),"main","guide.pdf"){progress.add(it)}
+            val doc=api.document(RepoId("owner","repo"),"main","guide.$extension"){progress.add(it)}
             assertArrayEquals(version,File(doc.attachment!!.localPath).readBytes())
             assertEquals(if(changedRevision)null else "bytes=$cutoff-",ranges[1])
             if(!ignoreRange&&!changedRevision&&!badRange)assertEquals(cutoff.toLong(),progress.first().downloadedBytes)
@@ -68,6 +69,9 @@ class ResumableDownloadTest {
         }finally{root.deleteRecursively()}
     }
     @Test fun retryResumesTheSameRevisionFromItsSavedOffset()=exercise()
+    @Test fun mobiAndAzw3RetryResumeTheSameRevisionAndValidateTheFullBlob() {
+        for(extension in listOf("mobi","azw3"))exercise(extension=extension)
+    }
     @Test fun ignoredRangesRestartWithoutAppendingDuplicateBytes()=exercise(ignoreRange=true)
     @Test fun changedFileRevisionsNeverReuseOldPartialBytes()=exercise(changedRevision=true)
     @Test fun invalidContentRangesRestartFromZero()=exercise(badRange=true)

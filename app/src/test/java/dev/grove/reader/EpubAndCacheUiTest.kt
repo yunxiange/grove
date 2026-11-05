@@ -114,6 +114,21 @@ class EpubAndCacheUiTest {
         compose.onNodeWithContentDescription("上一章").performClick()
         awaitText("第一章");awaitReaderPath("text/one.xhtml")
     }
+    @Test fun unnamedFrontMatterHidesItsHeaderTitleAndKeepsChapterNavigation() {
+        val entries=EpubFixture.frontMatterEntries().apply {
+            this["OPS/book.opf"]=getValue("OPS/book.opf").replace(Regex("<guide>.*?</guide>"),"")
+            this["OPS/text/front.xhtml"]="""<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Unknown</title></head><body><p>没有章节名称的扉页。</p></body></html>"""
+        }
+        installBook(EpubFixture.bytes(entries))
+        compose.runOnIdle{model.openBookmark(Bookmark(RepoId("owner","repo"),"main","books/reading.epub"))}
+        awaitReaderPath("text/front.xhtml")
+        compose.onNodeWithTag("epub-chapter-header").assertIsDisplayed()
+        compose.onNodeWithText("Unknown").assertDoesNotExist()
+        compose.onNodeWithText("未命名页面").assertDoesNotExist()
+        compose.onNodeWithText("纸上漫游").assertDoesNotExist()
+        compose.onNodeWithContentDescription("下一章").performClick()
+        awaitText("序言")
+    }
     private fun installPausedDownload(release:CountDownLatch,finished:CountDownLatch) {
         val bytes=EpubFixture.bytes()
         val api=GitHubClient(app.cacheDir.resolve("github"),account={"100"},connectionFactory={url->object:HttpURLConnection(url){
@@ -202,6 +217,11 @@ class EpubAndCacheUiTest {
         awaitChapter(1);awaitReaderPath("text/one.xhtml")
         lateinit var original:WebView
         compose.runOnIdle{original=webView(compose.activity.window.decorView)!!}
+        fun assertDirections(previous:Boolean,next:Boolean)=compose.runOnIdle {
+            val payload=JSONObject(original.javaClass.getDeclaredField("payload").apply{isAccessible=true}.get(original) as String)
+            assertEquals(previous,payload.getBoolean("canSwipePrevious"));assertEquals(next,payload.getBoolean("canSwipeNext"))
+        }
+        assertDirections(false,true)
         fun swipe(path:String,direction:Int) {
             compose.runOnIdle {
                 val bridge=shadowOf(original).getJavascriptInterface("Grove")
@@ -212,6 +232,7 @@ class EpubAndCacheUiTest {
         }
         swipe("one",-1);compose.onNodeWithContentDescription("上一章").assertIsNotEnabled()
         swipe("one",1);awaitChapter(2);awaitReaderPath("text/two.xhtml")
+        assertDirections(true,false)
         swipe("one",-1);swipe("two",0);swipe("two",1)
         compose.onNodeWithContentDescription("下一章").assertIsNotEnabled()
         swipe("two",-1);awaitChapter(1);awaitReaderPath("text/one.xhtml")

@@ -10,9 +10,49 @@ let rendering=0;
 let scrollTimer;
 let contentReady=false;
 let disposeTableLayout=()=>{};
+let mobiSession=null;
+let prefetchTimer=0;
+const cancelPrefetch=()=>{clearTimeout(prefetchTimer);prefetchTimer=0;};
+const disposeMobi=()=>{cancelPrefetch();const old=mobiSession;mobiSession=null;old?.promise.then(book=>book.destroy()).catch(()=>{});};
+const prefetchMobi=(book,index)=>{
+  cancelPrefetch();
+  const id=active?.id,session=mobiSession;
+  const nearby=[index+1,index-1].filter(x=>x>=0&&x<book.total);
+  const next=()=>{
+    if(active?.id!==id||mobiSession!==session||!contentReady||!nearby.length)return;
+    const section=nearby[0];
+    prefetchTimer=window.setTimeout(()=>{
+      if(active?.id!==id||mobiSession!==session||!contentReady)return;
+      if(chapterSwipe.dragging?.()){next();return;}
+      nearby.shift();
+      book.chapter(section).catch(()=>{}).finally(next);
+    },250);
+  };
+  next();
+};
+window.addEventListener('pagehide',disposeMobi);
+const loadMobi=payload=>{
+  // Parser-created inert documents must not request tracking images from book
+  // markup. This reader instance belongs to the native MOBI view; its images
+  // are decoded locally and rewritten to data URLs before display.
+  if(!document.head.querySelector('meta[data-grove-mobi-policy]')) {
+    const policy=document.createElement('meta');policy.httpEquiv='Content-Security-Policy';
+    policy.content='img-src data: blob:';policy.dataset.groveMobiPolicy='true';document.head.append(policy);
+  }
+  if(mobiSession?.url!==payload.attachmentUrl) {
+    disposeMobi();
+    mobiSession={url:payload.attachmentUrl,promise:(async()=>{
+      const {openMobi}=await import('./mobi-book.js');
+      const response=await fetch(payload.attachmentUrl);
+      if(!response.ok)throw Error('电子书缓存无法读取，请重新打开文件。');
+      return openMobi(await response.blob());
+    })()};
+  }
+  return mobiSession.promise;
+};
 const backToTop=installBackToTop(document,{getDocument:()=>contentReady?active:null});
-installChapterSwipe(document,{
-  getDocument:()=>contentReady&&active?.kind==='epub'&&active.swipePages?active:null,
+const chapterSwipe=installChapterSwipe(document,{
+  getDocument:()=>contentReady&&['epub','mobi'].includes(active?.kind)&&active.swipePages?active:null,
   onSwipe:(id,direction)=>window.Grove?.swipePage?.(id,direction)
 });
 const endObserver=createEndObserver(()=>({y:scrollY,height:innerHeight,total:document.documentElement.scrollHeight}),
@@ -31,11 +71,13 @@ const updatePreviewViewport=()=>{
   const image=article.querySelector('.preview-image');
   if(image)layoutPreviewImage(image);
 };
-const finishRender=(payload,generation,top,describe)=>{
+const finishRender=(payload,generation,top,describe,onReady)=>{
   requestAnimationFrame(()=>{
     if(generation!==rendering)return;
     window.scrollTo({left:0,top:typeof top==='function'?top():top,behavior:'instant'});
     contentReady=true;backToTop.update();checkEnd();
+    if(['epub','mobi'].includes(payload.kind))chapterSwipe.present?.(payload.id);
+    onReady?.();
     requestAnimationFrame(()=>{
       if(generation!==rendering)return;
       if(describe)window.Grove?.previewStatus?.(payload.id,describe());
@@ -53,11 +95,17 @@ const renderDocument=async payload=>{
   const isNew=active?.id!==payload.id;
   const previous=active;
   const oldY=scrollY;
+  if(!['epub','mobi'].includes(payload.kind)||previous?.kind!==payload.kind||previous?.attachmentUrl!==payload.attachmentUrl)chapterSwipe.cancel?.();
+  if(payload.kind==='mobi'&&previous?.id===payload.id) {
+    payload.canSwipePrevious=previous.canSwipePrevious;payload.canSwipeNext=previous.canSwipeNext;
+  }
   active=payload;
+  if(payload.kind!=='mobi')disposeMobi();
   endObserver.setPage(payload.id,payload.endPage);
   if(contentReady&&!isNew&&previous.content===payload.content&&previous.fontSize===payload.fontSize&&previous.warm===payload.warm&&previous.attachmentUrl===payload.attachmentUrl&&previous.attachmentMimeType===payload.attachmentMimeType) {
     requestAnimationFrame(()=>{if(generation===rendering)checkEnd();});return;
   }
+  cancelPrefetch();
   contentReady=false;
   backToTop.update();
   updatePreviewViewport();
@@ -65,7 +113,32 @@ const renderDocument=async payload=>{
   document.body.classList.toggle('warm',payload.warm);
   document.body.classList.toggle('attachment-preview',payload.kind==='image'||payload.kind==='spreadsheet');
   disposeTableLayout();disposeTableLayout=()=>{};
-  article.replaceChildren();
+  const keepPage=payload.kind==='mobi'&&previous?.kind==='mobi'&&previous.attachmentUrl===payload.attachmentUrl&&article.childNodes.length>0;
+  if(!keepPage&&payload.kind!=='epub')article.replaceChildren();
+  let mobi=null;
+  if(payload.kind==='mobi') {
+    if(!keepPage)article.textContent='正在解析电子书…';
+    try {
+      const book=await loadMobi(payload);
+      if(generation!==rendering)return;
+      const restored=Math.min(book.total-Number.EPSILON,Math.max(0,payload.progress*book.total));
+      let index=payload.bookSection>=0?payload.bookSection:Math.min(book.total-1,Math.floor(restored));
+      if(payload.bookHref)index=(await book.resolve(payload.bookHref))?.index??index;
+      const chapter=await book.chapter(index,payload.bookHref);
+      if(generation!==rendering)return;
+      payload.canSwipePrevious=index>0;payload.canSwipeNext=index+1<book.total;
+      renderEpub(article,chapter.html,chapter.url,DOMPurify);
+      mobi={book,bookTitle:book.metadata.title,author:book.metadata.author,total:book.total,section:index,title:chapter.title,contents:book.contents,
+        progress:payload.bookSection>=0?(payload.bookProgress||0):Math.min(1,restored-index),anchor:chapter.anchor};
+    }catch(error) {
+      if(generation!==rendering)return;
+      disposeMobi();
+      const message=/[\u3400-\u9fff]/.test(error.message)?error.message:'电子书无法读取，文件可能已损坏或格式不受支持。';
+      article.textContent=message;
+      finishRender(payload,generation,0,null,()=>window.Grove?.bookState?.(payload.id,JSON.stringify({error:message})));
+      return;
+    }
+  }
   if(payload.kind==='image') {
     const image=document.createElement('img');image.className='preview-image';image.alt='图片预览';image.src=payload.attachmentUrl;
     const vector=payload.attachmentMimeType==='image/svg+xml';
@@ -95,12 +168,13 @@ const renderDocument=async payload=>{
     }catch {if(generation!==rendering)return;article.textContent='无法读取工作簿，可能已加密、损坏或超过预览范围。';window.Grove?.renderFailed?.(payload.id);}
     window.Grove?.headings(payload.id,'[]');return;
   }
-  if(payload.kind==='epub')renderEpub(article,payload.content,payload.url,DOMPurify);
+  if(payload.kind==='mobi') { /* The local parser has supplied a sanitized chapter. */ }
+  else if(payload.kind==='epub')renderEpub(article,payload.content,payload.url,DOMPurify);
   else article.innerHTML=sanitizeMarkdown(md.render(payload.content),DOMPurify);
   renderMath(article);
-  const headings=payload.kind==='epub'?[]:normalizeLinks(article,payload.url);
+  const headings=['epub','mobi'].includes(payload.kind)?[]:normalizeLinks(article,payload.url);
   disposeTableLayout=layoutTables(article);
-  document.querySelectorAll('pre:not(.mermaid)').forEach(pre=>{
+  article.querySelectorAll('pre:not(.mermaid)').forEach(pre=>{
     const header=document.createElement('div');header.className='code-header';
     const language=pre.querySelector('code')?.className.replace('language-','')||'code';
     const label=document.createElement('span');label.textContent=language;
@@ -119,7 +193,15 @@ const renderDocument=async payload=>{
   }
   if(generation!==rendering)return;
   window.Grove?.headings(payload.id,JSON.stringify(headings));
-  finishRender(payload,generation,()=>isNew?(document.documentElement.scrollHeight-innerHeight)*payload.progress:oldY);
+  finishRender(payload,generation,()=>isNew?(document.documentElement.scrollHeight-innerHeight)*(mobi?.progress??payload.progress):oldY,null,
+    mobi?()=>{
+      const {book,...info}=mobi;
+      window.Grove?.bookState?.(payload.id,JSON.stringify(info));
+      prefetchMobi(book,mobi.section);
+    }:null);
+  if(mobi?.anchor&&isNew)requestAnimationFrame(()=>{
+    if(generation===rendering)document.getElementById(mobi.anchor)?.scrollIntoView();
+  });
   if(payload.kind==='epub'&&isNew&&new URL(payload.url).hash)requestAnimationFrame(()=>{
     document.getElementById(decodeURIComponent(new URL(payload.url).hash.slice(1)))?.scrollIntoView();
   });
@@ -127,10 +209,16 @@ const renderDocument=async payload=>{
 window.scrollToHeading=id=>document.getElementById(id)?.scrollIntoView({behavior:'smooth',block:'start'});
 document.addEventListener('click',event=>{
   const image=event.target.closest('article img:not(.preview-image)');
-  if(image){event.preventDefault();if(active?.kind!=='epub')window.Grove?.openImage(image.currentSrc||image.src);return;}
+  if(image){event.preventDefault();if(!['epub','mobi'].includes(active?.kind))window.Grove?.openImage(image.currentSrc||image.src);return;}
   const anchor=event.target.closest('a');if(!anchor)return;
   event.preventDefault();
   const href=anchor.getAttribute('href');if(!href)return;
+  if(active?.kind==='mobi') {
+    const url=new URL(href,active.url);
+    if(url.origin==='https://appassets.androidplatform.net'&&url.pathname==='/epub/mobi/link') {
+      window.Grove?.bookLink?.(active.id,url.searchParams.get('href'));return;
+    }
+  }
   if(href.startsWith('#')){window.scrollToHeading(decodeURIComponent(href.slice(1)));return;}
   window.Grove?.openLink(href);
 });
@@ -138,7 +226,7 @@ window.addEventListener('scroll',()=>{
   checkEnd();
   clearTimeout(scrollTimer);
   scrollTimer=setTimeout(()=>{
-    if(!active)return;
+    if(!active||!contentReady)return;
     const max=document.documentElement.scrollHeight-innerHeight;
     window.Grove?.progress(active.id,max>0?Math.min(1,scrollY/max):1);
   },180);

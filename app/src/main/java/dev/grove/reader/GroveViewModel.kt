@@ -279,7 +279,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
             }finally{if(currentCoroutineContext().isActive||load.error!=null){load.busy=false;publishDocumentLoad(load)}}
         }
         load.job=try {
-            if(target.path.substringAfterLast('.').lowercase() in setOf("pdf","epub"))
+            if(streamedPreviewType(target.path)!=null)
                 DocumentDownloadService.prepare(getApplication(),target.path.substringAfterLast('/')){id->read(id)}
             else viewModelScope.launch(start=CoroutineStart.LAZY){read(null)}
         }catch(_:Exception){
@@ -389,7 +389,7 @@ class GroveViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun flushProgress() {
         val s=mutable.value;val doc=s.document ?: return
-        if((!doc.markdown&&doc.attachment?.kind!=PreviewKind.EPUB) || s.raw) return
+        if((!doc.markdown&&doc.attachment?.kind?.ebook!=true) || s.raw) return
         val bookmark=Bookmark(doc.repo,doc.ref,doc.path,s.progress)
         store.saveProgress(bookmark);mutable.update { it.copy(resume=bookmark) };lastSaved=System.currentTimeMillis()
     }

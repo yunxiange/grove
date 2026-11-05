@@ -13,7 +13,8 @@ import javax.xml.parsers.DocumentBuilderFactory
 data class EpubLink(val path:String,val fragment:String?=null)
 data class EpubChapter(val path:String,val title:String)
 data class EpubContents(val title:String,val link:EpubLink,val depth:Int=0)
-data class EpubBook(val title:String,val author:String,val chapters:List<EpubChapter>,val contents:List<EpubContents>)
+data class EpubBook(val title:String,val author:String,val chapters:List<EpubChapter>,val contents:List<EpubContents>,
+    val pageAliases:Map<String,String> = emptyMap())
 
 /** Reads bounded resources directly from the archive; never extracts untrusted ZIP paths. */
 object EpubArchive {
@@ -74,7 +75,9 @@ object EpubArchive {
             .parse(InputSource(StringReader(source))).documentElement
     }
     private fun pageKindTitle(types:String):String?=types.split(Regex("\\s+")).firstNotNullOfOrNull{pageKindTitles[it.lowercase()]}
-    private fun cleanTitle(value:String)=value.replace(Regex("\\s+")," ").trim().take(160).takeIf{it.isNotBlank()}
+    private fun cleanTitle(value:String)=value.replace(Regex("\\s+")," ").trim().trim('"','\'','“','”','‘','’').trim().take(160).takeIf{
+        it.isNotBlank()&&!Regex("(?:unknown(?: (?:content|title))?|untitled|undefined|null|none|no title|未知(?:内容|标题)?|未命名(?:页面)?|无标题)(?:[ _-]?\\d+)?",RegexOption.IGNORE_CASE).matches(it)
+    }
     private fun pageTitle(zip:ZipFile,path:String):String? = runCatching {
         // Spine entries also include covers and front matter. Read only unmatched page
         // titles within the existing resource bound; never turn a file index into a chapter number.
@@ -85,6 +88,18 @@ object EpubArchive {
         }
         semantic?:(1..6).firstNotNullOfOrNull{level->elements(body?:root,"h$level").firstNotNullOfOrNull{cleanTitle(it.textContent)}}
             ?:elements(root,"head").firstOrNull()?.let{head->elements(head,"title").firstNotNullOfOrNull{cleanTitle(it.textContent)}}
+    }.getOrNull()
+    private fun imageOnlyPage(zip:ZipFile,path:String):EpubLink? = runCatching {
+        val body=elements(xml(read(zip,path)),"body").firstOrNull()?:return@runCatching null
+        if(body.textContent.isNotBlank())return@runCatching null
+        val nodes=elements(body,"*")
+        // Only neutral wrappers around one image qualify. Never discard text,
+        // title/copyright pages, drawings, or other meaningful front matter.
+        if(nodes.any{it.localName !in setOf("div","p","span","section","a","svg","g","img","image")})return@runCatching null
+        val image=nodes.singleOrNull{it.localName=="img"||it.localName=="image"}?:return@runCatching null
+        val href=if(image.localName=="img")image.getAttribute("src") else
+            image.getAttribute("href").ifBlank{image.getAttributeNS("http://www.w3.org/1999/xlink","href")}
+        if(href.isBlank())null else resolve(path,href)
     }.getOrNull()
     fun chapter(file:File,path:String):String=ZipFile(file).use{text(read(it,entryPath(path)))}
     fun open(file:File):EpubBook=ZipFile(file).use{zip->
@@ -101,7 +116,7 @@ object EpubArchive {
             ?:throw IllegalArgumentException("EPUB 缺少书籍描述。")
         val pkg=xml(read(zip,packagePath))
         val metadata=elements(pkg,"metadata").firstOrNull()
-        val title=metadata?.let{elements(it,"title").firstOrNull()?.textContent?.trim()}.orEmpty().ifBlank{"EPUB"}
+        val title=metadata?.let{elements(it,"title").firstOrNull()?.textContent?.let(::cleanTitle)}?:"电子书"
         val author=metadata?.let{elements(it,"creator").joinToString("、"){e->e.textContent.trim()}}.orEmpty()
         val manifest=elements(pkg,"manifest").firstOrNull()?.let{elements(it,"item")}.orEmpty()
         val items=manifest.associateBy{it.getAttribute("id")}
@@ -138,7 +153,7 @@ object EpubArchive {
                     if(link.path !in paths)continue
                     var parent=a.parentNode;var depth=0
                     while(parent!=null&&parent!=navigation){if(parent is Element&&parent.localName=="ol")depth++;parent=parent.parentNode}
-                    toc.add(EpubContents(a.textContent.trim().ifBlank{"章节"},link,(depth-1).coerceIn(0,3)))
+                    toc.add(EpubContents(a.textContent.trim(),link,(depth-1).coerceIn(0,3)))
                 }
             }
         }
@@ -148,16 +163,36 @@ object EpubArchive {
             if(path!=null)for(point in elements(xml(read(zip,path)),"navPoint")) {
                 val src=elements(point,"content").firstOrNull()?.getAttribute("src")?:continue
                 val link=resolve(path,src)?:continue
-                if(link.path in paths)toc.add(EpubContents(elements(point,"navLabel").firstOrNull()?.textContent?.trim().orEmpty().ifBlank{"章节"},link))
+                if(link.path in paths)toc.add(EpubContents(elements(point,"navLabel").firstOrNull()?.textContent?.trim().orEmpty(),link))
             }
         }
-        val chapters=paths.map{path->
+        val coverImages=manifest.filter{item->
+            "cover-image" in item.getAttribute("properties").split(' ')||metadata?.let{meta->
+                elements(meta,"meta").any{it.getAttribute("name")=="cover"&&it.getAttribute("content")==item.getAttribute("id")}
+            }==true
+        }.mapNotNull{resolve(packagePath,it.getAttribute("href"))?.path}.toSet()
+        val first=paths.first()
+        val cover=imageOnlyPage(zip,first)
+        val aliases=linkedMapOf<String,String>()
+        if(cover!=null&&(cover.path in coverImages||pageLabels[first]=="封面")) {
+            // Converters sometimes prepend an SVG cover wrapper while retaining
+            // the original image-only cover in the spine. Compare resolved image
+            // paths, not XHTML filenames, and stop at the first different page.
+            for(path in paths.drop(1)) {
+                if(imageOnlyPage(zip,path)!=cover)break
+                aliases[path]=first
+            }
+        }
+        val navigation=toc.map{entry->entry.copy(link=entry.link.copy(path=aliases[entry.link.path]?:entry.link.path))}.distinctBy{it.link}
+        val chapters=paths.filter{it !in aliases}.map{path->
             require(zip.getEntry(path)!=null){"EPUB 章节文件缺失。"}
-            val links=toc.filter{it.link.path==path}
-            val pageName=links.firstOrNull{it.link.fragment.isNullOrBlank()}?.title
-                ?:pageLabels[path]?:links.firstOrNull()?.title?:pageTitle(zip,path)?:"未命名页面"
+            val links=navigation.filter{it.link.path==path}
+            val pageName=links.firstOrNull{it.link.fragment.isNullOrBlank()}?.title?.let(::cleanTitle)
+                ?:pageLabels[path]?:links.firstNotNullOfOrNull{cleanTitle(it.title)}?:pageTitle(zip,path)?:""
             EpubChapter(path,pageName)
         }
-        EpubBook(title,author,chapters,toc.ifEmpty{chapters.map{EpubContents(it.title,EpubLink(it.path))}})
+        val chapterTitles=chapters.mapIndexed{index,chapter->chapter.path to chapter.title.ifBlank{"页面 ${index+1}"}}.toMap()
+        val contents=navigation.map{it.copy(title=cleanTitle(it.title)?:chapterTitles.getValue(it.link.path))}
+        EpubBook(title,author,chapters,contents.ifEmpty{chapters.map{EpubContents(chapterTitles.getValue(it.path),EpubLink(it.path))}},aliases)
     }
 }

@@ -51,6 +51,16 @@ class PdfSwipeUiTest {
         viewport().performTouchInput{down(center);moveBy(Offset(-15f,0f));up()}
         assertEquals(0,page.intValue)
     }
+    @Test fun aHorizontalDragMovesThePageBeforeReleaseAndAShortDragSettlesBack() {
+        setup()
+        val image=compose.onNodeWithContentDescription("PDF 第 1 页")
+        val before=image.getUnclippedBoundsInRoot().left.value
+        viewport().performTouchInput{down(center);moveBy(Offset(-50f,0f))}
+        assertTrue("拖动中就应有跟手反馈",image.getUnclippedBoundsInRoot().left.value<before)
+        viewport().performTouchInput{up()};compose.waitForIdle()
+        assertEquals(0,page.intValue)
+        assertEquals(before,image.getUnclippedBoundsInRoot().left.value,.5f)
+    }
     @Test fun zoomedPagesPanBeforeTurningAndRequireAnOutwardSwipeAtTheEdge() {
         setup(zoom=2f)
         viewport().performTouchInput{swipe(Offset(width*.7f,centerY),Offset(width*.5f,centerY),durationMillis=1000)}

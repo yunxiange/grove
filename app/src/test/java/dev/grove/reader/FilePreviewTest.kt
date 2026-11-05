@@ -35,6 +35,20 @@ class FilePreviewTest {
             assertEquals(PreviewKind.SPREADSHEET,decode(api,"data.xlsx",output.toByteArray()).attachment?.kind)
         }finally{root.deleteRecursively()}
     }
+    @Test fun mobiAndAzw3AreAttachmentsAndPreserveTheirOriginalBytes() {
+        val root=java.nio.file.Files.createTempDirectory("grove-mobi-routing").toFile()
+        try {
+            for(extension in listOf("mobi","azw3")) {
+                val bytes=listOf(File("../reader/fixtures/mobi/alice.$extension"),File("reader/fixtures/mobi/alice.$extension")).first{it.isFile}.readBytes()
+                val doc=decode(GitHubClient(root),"book.${extension.uppercase()}",bytes)
+                assertEquals(PreviewKind.MOBI,doc.attachment!!.kind)
+                assertEquals(streamedPreviewType(doc.path)?.mimeType,doc.attachment.mimeType)
+                assertArrayEquals(bytes,File(doc.attachment.localPath).readBytes())
+                assertEquals("",doc.content)
+            }
+            assertNull(previewType("renamed.azw3","<html>login</html>".toByteArray()))
+        }finally{root.deleteRecursively()}
+    }
     @Test fun attachmentCachesAreSeparatedAndClearedPerAccount() {
         val root=createTempDir(prefix="grove-account-");var user="100"
         val api=GitHubClient(root,account={user})

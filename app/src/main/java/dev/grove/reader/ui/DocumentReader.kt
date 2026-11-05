@@ -39,7 +39,9 @@ fun DocumentReader(document: Document,fontSize: Int,warm: Boolean,initialProgres
     onImage:(String)->Unit=onLink,
     imageResource:((Document,String)->Pair<String,ByteArray>?)?=null,
     onImageLongPress:((Document,String)->Unit)?=null,
-    endPage:Int?=null,onEnd:(()->Unit)?=null,diagnostics:PreviewDiagnostics?=null,onPageSwipe:((Int)->Unit)?=null) {
+    endPage:Int?=null,onEnd:(()->Unit)?=null,diagnostics:PreviewDiagnostics?=null,onPageSwipe:((Int)->Unit)?=null,
+    bookRequest:MobiRequest?=null,onBookState:((String)->Unit)?=null,onBookLink:((String)->Unit)?=null,
+    canSwipePrevious:Boolean=true,canSwipeNext:Boolean=true) {
     val link by rememberUpdatedState(onLink)
     val progressCallback by rememberUpdatedState(onProgress)
     val headingsCallback by rememberUpdatedState(onHeadings)
@@ -51,15 +53,22 @@ fun DocumentReader(document: Document,fontSize: Int,warm: Boolean,initialProgres
     val currentEndPage by rememberUpdatedState(endPage)
     val currentDiagnostics by rememberUpdatedState(diagnostics)
     val swipeCallback by rememberUpdatedState(onPageSwipe)
+    val bookCallback by rememberUpdatedState(onBookState)
+    val bookLinkCallback by rememberUpdatedState(onBookLink)
+    val renderKey=document.key+(bookRequest?.let{":mobi:${it.sequence}"}?:"")
+    val currentRenderKey by rememberUpdatedState(renderKey)
     var previewError by remember(document.key){mutableStateOf<String?>(null)}
     var attempt by remember{mutableIntStateOf(0)}
     val showError by rememberUpdatedState<(String)->Unit>({previewError=it})
     // Reading position is restored only when the document changes, not after every scroll event.
     val initial = remember(document.key) { initialProgress }
-    val payload=remember(document,fontSize,warm,endPage,onPageSwipe!=null) { JSONObject().put("id",document.key).put("content",document.content)
+    val payload=remember(document,fontSize,warm,endPage,onPageSwipe!=null,bookRequest,canSwipePrevious,canSwipeNext) { JSONObject().put("id",renderKey).put("content",document.content)
         .put("url",document.url).put("fontSize",fontSize).put("warm",warm).put("progress",initial.toDouble())
         .put("kind",document.attachment?.kind?.name?.lowercase()?:"markdown").put("endPage",endPage?:JSONObject.NULL)
         .put("swipePages",onPageSwipe!=null)
+        .put("canSwipePrevious",canSwipePrevious).put("canSwipeNext",canSwipeNext)
+        .put("bookSection",bookRequest?.section?:-1).put("bookHref",bookRequest?.href?:JSONObject.NULL)
+        .put("bookProgress",bookRequest?.progress?.toDouble()?:0.0)
         .put("attachmentMimeType",document.attachment?.mimeType?:"")
         .put("attachmentUrl",document.attachment?.let{"https://appassets.androidplatform.net/attachment/"+File(it.localPath).name}?:"").toString() }
     Box(modifier) {
@@ -88,7 +97,7 @@ fun DocumentReader(document: Document,fontSize: Int,warm: Boolean,initialProgres
         PaperWebView(context).apply {
             currentDiagnostics?.webViewVersion=WebViewCompat.getCurrentWebViewPackage(context)?.let{"${it.packageName} ${it.versionName}"}?:"无法获取版本"
             onBoundsChanged={w,h->currentDiagnostics?.viewport="$w × $h px"}
-            onRenderResult={id,result->if(id==currentDocument.key)currentDiagnostics?.renderResult=result}
+            onRenderResult={id,result->if(id==currentRenderKey)currentDiagnostics?.renderResult=result}
             onFrameState={currentDiagnostics?.frameResult=it}
             onFailure={showError(it)}
             setBackgroundColor(android.graphics.Color.rgb(249,247,241))
@@ -107,25 +116,31 @@ fun DocumentReader(document: Document,fontSize: Int,warm: Boolean,initialProgres
             addJavascriptInterface(object {
                 @JavascriptInterface fun readerReady() {post {currentDiagnostics?.rendererReady=true;rendererReady()}}
                 @JavascriptInterface fun previewStatus(id:String,status:String) {post {
-                    if(id==currentDocument.key)currentDiagnostics?.contentResult=status.take(160)
+                    if(id==currentRenderKey)currentDiagnostics?.contentResult=status.take(160)
                 }}
                 @JavascriptInterface fun previewPresented(id:String) {post {
-                    if(id==currentDocument.key) {
+                    if(id==currentRenderKey) {
                         if(currentDocument.attachment!=null)scrollTo(0,0)
                         presentFrame()
                     }
                 }}
                 @JavascriptInterface fun renderFailed(id:String) {post {
-                    if(id.isBlank()||id==currentDocument.key)fail("预览加载失败，请重新加载。")
+                    if(id.isBlank()||id==currentRenderKey)fail("预览加载失败，请重新加载。")
                 }}
                 @JavascriptInterface fun openLink(url:String) {post {link(url)}}
                 @JavascriptInterface fun openImage(url:String) {post {imageCallback(url)}}
                 @JavascriptInterface fun copyCode(text:String) {post {
                     (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("代码",text))
                 }}
-                @JavascriptInterface fun progress(id:String,value:Float) {post {if(id==currentDocument.key)progressCallback(id,value)}}
+                @JavascriptInterface fun progress(id:String,value:Float) {post {if(id==currentRenderKey)progressCallback(currentDocument.key,value)}}
+                @JavascriptInterface fun bookState(id:String,json:String) {post {
+                    if(id==currentRenderKey&&currentDocument.attachment?.kind==PreviewKind.MOBI&&json.length<=1_000_000)bookCallback?.invoke(json)
+                }}
+                @JavascriptInterface fun bookLink(id:String,href:String) {post {
+                    if(id==currentRenderKey&&currentDocument.attachment?.kind==PreviewKind.MOBI&&href.length<=200)bookLinkCallback?.invoke(href)
+                }}
                 @JavascriptInterface fun swipePage(id:String,direction:Int) {post {
-                    if(id==currentDocument.key&&currentDocument.attachment?.kind==PreviewKind.EPUB&&(direction==1||direction == -1))swipeCallback?.invoke(direction)
+                    if(id==currentRenderKey&&currentDocument.attachment?.kind?.ebook==true&&(direction==1||direction == -1))swipeCallback?.invoke(direction)
                 }}
                 @JavascriptInterface fun reachedEnd(id:String,page:Int) {post {
                     if(id==currentDocument.key&&page==currentEndPage&&lastEnd!=(id to page)) {

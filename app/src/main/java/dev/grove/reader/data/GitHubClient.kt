@@ -88,11 +88,7 @@ class GitHubClient(private val cacheDir: File, private val token: () -> String =
         onDownloadProgress:suspend (FileDownloadProgress)->Unit={}): Document {
         val expectedAccount=account()
         val route="/repos/${id.fullName}/contents/${encodePath(path)}?ref=${encode(ref)}"
-        val streamedType=when(path.substringAfterLast('.').lowercase()) {
-            "epub"->PreviewType(PreviewKind.EPUB,"application/epub+zip")
-            "pdf"->PreviewType(PreviewKind.PDF,"application/pdf")
-            else->null
-        }
+        val streamedType=streamedPreviewType(path)
         val json=JSONObject(request(route,accept=if(streamedType!=null)"application/vnd.github.object+json"else"application/vnd.github+json"))
         if(streamedType==null&&json.optLong("size")>20_000_000L)throw GitHubException("文件超过 20 MB，请在 GitHub 中打开。")
         if(streamedType!=null&&json.optString("encoding")!="base64")return downloadAttachment(id,ref,path,route,json,expectedAccount,streamedType,onDownloadProgress)
@@ -114,7 +110,7 @@ class GitHubClient(private val cacheDir: File, private val token: () -> String =
         }
     }
     private fun decodeDocument(id: RepoId, ref: String, json: JSONObject): Document {
-        val streamed=json.optString("path").substringAfterLast('.').lowercase() in setOf("epub","pdf")
+        val streamed=streamedPreviewType(json.optString("path"))!=null
         if ((!streamed&&json.optLong("size") > 20_000_000L) || json.optString("encoding") != "base64")
             throw GitHubException("文件超过预览大小限制，请在 GitHub 中打开。")
         val bytes = Base64.getMimeDecoder().decode(json.getString("content"))
@@ -185,7 +181,7 @@ class GitHubClient(private val cacheDir: File, private val token: () -> String =
             onDownloadProgress(FileDownloadProgress(bytes,expectedLength?.takeIf{bytes<=it},type.kind))
         }
         suspend fun commit(total:Long):Document {
-            val prefix=partial.inputStream().use{input->val bytes=ByteArray(8);val n=input.read(bytes);bytes.copyOf(n.coerceAtLeast(0))}
+            val prefix=partial.inputStream().use{input->val bytes=ByteArray(78);val n=input.read(bytes);bytes.copyOf(n.coerceAtLeast(0))}
             if(previewType(path,prefix)?.kind!=type.kind)throw GitHubException("下载内容不是有效的 $label 文件。")
             if(revision.matches(Regex("[0-9a-fA-F]{40}"))) {
                 val digest=MessageDigest.getInstance("SHA-1").apply{update("blob $total\u0000".toByteArray())}

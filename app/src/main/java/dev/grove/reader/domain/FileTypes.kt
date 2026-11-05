@@ -2,6 +2,14 @@ package dev.grove.reader.domain
 
 data class PreviewType(val kind: PreviewKind, val mimeType: String)
 
+fun streamedPreviewType(path:String):PreviewType?=when(path.substringAfterLast('.').lowercase()) {
+    "pdf"->PreviewType(PreviewKind.PDF,"application/pdf")
+    "epub"->PreviewType(PreviewKind.EPUB,"application/epub+zip")
+    "mobi"->PreviewType(PreviewKind.MOBI,"application/x-mobipocket-ebook")
+    "azw3"->PreviewType(PreviewKind.MOBI,"application/vnd.amazon.mobi8-ebook")
+    else->null
+}
+
 fun decodeSvgSource(bytes:ByteArray):String {
     fun byteAt(i:Int)=bytes.getOrNull(i)?.toInt()?.and(255)
     val charset=when {
@@ -49,6 +57,7 @@ fun previewType(path: String, bytes: ByteArray): PreviewType? {
     if(image!=null)return PreviewType(PreviewKind.IMAGE,image)
     if(prefix.startsWith("%PDF-"))return PreviewType(PreviewKind.PDF,"application/pdf")
     if(extension=="epub" && signature(80,75))return PreviewType(PreviewKind.EPUB,"application/epub+zip")
+    if(extension in setOf("mobi","azw3")&&bytes.size>=78&&bytes.copyOfRange(60,68).toString(Charsets.US_ASCII)=="BOOKMOBI")return streamedPreviewType(path)
     if(extension in listOf("xlsx","xlsm","xltx","xltm") && signature(80,75))return PreviewType(PreviewKind.SPREADSHEET,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     if(extension=="xls" && signature(208,207,17,224,161,177,26,225))return PreviewType(PreviewKind.SPREADSHEET,"application/vnd.ms-excel")
     if(extension in listOf("csv","tsv"))return PreviewType(PreviewKind.SPREADSHEET,if(extension=="csv")"text/csv" else "text/tab-separated-values")

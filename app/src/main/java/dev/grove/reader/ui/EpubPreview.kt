@@ -32,11 +32,22 @@ import java.net.URI
 
 class EpubNavigation(val position:Int,val total:Int)
 
+private class EpubChapterCache(private val file:File) {
+    private val text=LinkedHashMap<String,String>(4,.75f,true)
+    @Synchronized fun read(path:String):String {
+        text[path]?.let{return it}
+        val value=EpubArchive.chapter(file,path);text[path]=value
+        while(text.size>3||text.values.sumOf{it.length}>4_000_000)text.remove(text.keys.first())
+        return value
+    }
+}
+
 @Composable
 fun EpubPreview(document:Document,fontSize:Int,warm:Boolean,initialProgress:Float,
     onProgress:(Float)->Unit,onLink:(String)->Unit,showContents:Boolean,onDismissContents:()->Unit,modifier:Modifier=Modifier,
     bottomBar:@Composable (EpubNavigation)->Unit = {}) {
     val file=File(document.attachment!!.localPath)
+    val chapterCache=remember(file.absolutePath){EpubChapterCache(file)}
     var error by remember(document.key){mutableStateOf<String?>(null)}
     val book by produceState<EpubBook?>(null,file.absolutePath) {
         try{value=withContext(Dispatchers.IO){EpubArchive.open(file)}}
@@ -68,17 +79,26 @@ fun EpubPreview(document:Document,fontSize:Int,warm:Boolean,initialProgress:Floa
     val chapter=current.chapters[index]
     val activePath by rememberUpdatedState(chapter.path)
     fun select(link:EpubLink) {
-        val next=current.chapters.indexOfFirst{it.path==link.path}
+        val path=current.pageAliases[link.path]?:link.path
+        val next=current.chapters.indexOfFirst{it.path==path}
         if(next<0)return
-        if(chapter.path!=link.path){chapterProgress=0f;selectedPath=link.path;onProgress(next.toFloat()/current.chapters.size)}
+        if(chapter.path!=path){chapterProgress=0f;selectedPath=path;onProgress(next.toFloat()/current.chapters.size)}
         anchor=link.fragment
         onDismissContents()
     }
     val source by produceState<Pair<String,String>?>(null,file.absolutePath,chapter.path) {
         error=null
-        try{value=withContext(Dispatchers.IO){chapter.path to EpubArchive.chapter(file,chapter.path)}}
+        try{value=withContext(Dispatchers.IO){chapter.path to chapterCache.read(chapter.path)}}
         catch(e:CancellationException){throw e}
         catch(e:Exception){error=e.message?:"EPUB 章节无法读取。"}
+    }
+    LaunchedEffect(chapter.path,source?.first) {
+        if(source?.first==chapter.path) {
+            delay(250)
+            for(next in listOf(index+1,index-1).filter{it in current.chapters.indices})try {
+                withContext(Dispatchers.IO){chapterCache.read(current.chapters[next].path)}
+            }catch(e:CancellationException){throw e}catch(_:Exception){/* Report only if this page is opened. */}
+        }
     }
     // Keep the title on the page still displayed while the next page is being read.
     val displayedChapter=current.chapters.firstOrNull{it.path==source?.first}?:chapter
@@ -97,18 +117,8 @@ fun EpubPreview(document:Document,fontSize:Int,warm:Boolean,initialProgress:Floa
         }
     }
     Column(modifier) {
-        Row(Modifier.fillMaxWidth().padding(horizontal=8.dp).testTag("epub-chapter-header"),verticalAlignment=Alignment.CenterVertically) {
-            TextButton(onClick={select(EpubLink(current.chapters[index-1].path))},enabled=index>0,
-                modifier=Modifier.width(64.dp).heightIn(min=48.dp).semantics{contentDescription="上一章"},contentPadding=PaddingValues(horizontal=4.dp)) {
-                Text("上一章",fontSize=11.sp,lineHeight=16.sp)
-            }
-            Text(displayedChapter.title,Modifier.weight(1f).padding(horizontal=8.dp),fontFamily=FontFamily.Serif,fontSize=12.sp,lineHeight=18.sp,
-                maxLines=1,overflow=TextOverflow.Ellipsis,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
-            TextButton(onClick={select(EpubLink(current.chapters[index+1].path))},enabled=index<current.chapters.lastIndex,
-                modifier=Modifier.width(64.dp).heightIn(min=48.dp).semantics{contentDescription="下一章"},contentPadding=PaddingValues(horizontal=4.dp)) {
-                Text("下一章",fontSize=11.sp,lineHeight=16.sp)
-            }
-        }
+        EbookChapterHeader(displayedChapter.title,index,current.chapters.size,
+            {select(EpubLink(current.chapters[index-1].path))},{select(EpubLink(current.chapters[index+1].path))})
         // Keep the same reader mounted while the next chapter loads. Replacing it
         // with a spinner or keying it by chapter would reload the entire WebView.
         val loaded=source
@@ -131,15 +141,33 @@ fun EpubPreview(document:Document,fontSize:Int,warm:Boolean,initialProgress:Floa
             }},{_,_->},currentAnchor,Modifier.fillMaxSize(),onPageSwipe={direction->
                 val next=displayedIndex+direction
                 if(activePath==displayedPath&&error==null&&next in current.chapters.indices)select(EpubLink(current.chapters[next].path))
-            })
+            },canSwipePrevious=displayedIndex>0,canSwipeNext=displayedIndex<current.chapters.lastIndex)
         }else if(error==null)CircularProgressIndicator(Modifier.align(Alignment.Center).size(25.dp),color=Muted)
-        if(loaded!=null&&loaded.first!=chapter.path&&error==null)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp),color=Muted,trackColor=Rule)
         if(error!=null)Text(error!!,Modifier.align(Alignment.TopCenter).padding(24.dp),fontSize=12.sp,color=Muted)
         }
-        Row(Modifier.fillMaxWidth().heightIn(min=16.dp).padding(horizontal=20.dp).testTag("epub-chapter-progress"),verticalAlignment=Alignment.CenterVertically) {
-            Text("本章 ${(chapterProgress*100).toInt()}%",Modifier.width(60.dp),fontSize=9.sp,lineHeight=12.sp,color=Muted)
-            LinearProgressIndicator(progress={chapterProgress.coerceIn(0f,1f)},modifier=Modifier.weight(1f).height(2.dp),color=Ink,trackColor=Rule)
-        }
+        EbookChapterProgress(chapterProgress)
         bottomBar(EpubNavigation(index+1,current.chapters.size))
+    }
+}
+
+@Composable internal fun EbookChapterHeader(title:String,index:Int,total:Int,previous:()->Unit,next:()->Unit,enabled:Boolean=true) {
+    Row(Modifier.fillMaxWidth().padding(horizontal=8.dp).testTag("epub-chapter-header"),verticalAlignment=Alignment.CenterVertically) {
+        TextButton(onClick=previous,enabled=enabled&&index>0,
+            modifier=Modifier.width(64.dp).heightIn(min=48.dp).semantics{contentDescription="上一章"},contentPadding=PaddingValues(horizontal=4.dp)) {
+            Text("上一章",fontSize=11.sp,lineHeight=16.sp)
+        }
+        if(title.isNotBlank())Text(title,Modifier.weight(1f).padding(horizontal=8.dp),fontFamily=FontFamily.Serif,fontSize=12.sp,lineHeight=18.sp,
+            maxLines=1,overflow=TextOverflow.Ellipsis,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
+        else Spacer(Modifier.weight(1f))
+        TextButton(onClick=next,enabled=enabled&&index+1<total,
+            modifier=Modifier.width(64.dp).heightIn(min=48.dp).semantics{contentDescription="下一章"},contentPadding=PaddingValues(horizontal=4.dp)) {
+            Text("下一章",fontSize=11.sp,lineHeight=16.sp)
+        }
+    }
+}
+@Composable internal fun EbookChapterProgress(value:Float) {
+    Row(Modifier.fillMaxWidth().heightIn(min=16.dp).padding(horizontal=20.dp).testTag("epub-chapter-progress"),verticalAlignment=Alignment.CenterVertically) {
+        Text("本章 ${(value.coerceIn(0f,1f)*100).toInt()}%",Modifier.width(60.dp),fontSize=9.sp,lineHeight=12.sp,color=Muted)
+        LinearProgressIndicator(progress={value.coerceIn(0f,1f)},modifier=Modifier.weight(1f).height(2.dp),color=Ink,trackColor=Rule)
     }
 }

@@ -29,7 +29,9 @@ data class RepoFile(val path: String, val folder: Boolean, val size: Long = 0) {
     val name get() = path.substringAfterLast('/')
     val markdown get() = name.endsWith(".md", true) || name.endsWith(".markdown", true)
 }
-enum class PreviewKind { IMAGE, PDF, SPREADSHEET, EPUB }
+enum class PreviewKind { IMAGE, PDF, SPREADSHEET, EPUB, MOBI;
+    val ebook get()=this==EPUB||this==MOBI
+}
 data class Attachment(val kind: PreviewKind, val mimeType: String, val localPath: String)
 data class FileDownloadProgress(val downloadedBytes:Long,val totalBytes:Long?,val kind:PreviewKind=PreviewKind.EPUB) {
     val fraction:Float? get()=totalBytes?.takeIf{it>0&&downloadedBytes<=it}?.let{(downloadedBytes.toDouble()/it).toFloat().coerceIn(0f,1f)}

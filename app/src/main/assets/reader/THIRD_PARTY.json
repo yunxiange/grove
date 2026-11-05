@@ -1,5 +1,11 @@
 [
   {
+    "name": "foliate-js/mobi",
+    "version": "78914aef4466eb960965702401634c2cb348e9b1",
+    "license": "MIT",
+    "source": "https://github.com/johnfactotum/foliate-js"
+  },
+  {
     "name": "@antfu/install-pkg",
     "version": "2.1.0",
     "license": "MIT"

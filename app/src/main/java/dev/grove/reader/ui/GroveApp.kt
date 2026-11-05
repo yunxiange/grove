@@ -46,6 +46,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.Role
@@ -537,13 +540,47 @@ private fun formatStars(stars:Int)=if(stars>=1000)"%.1fk".format(stars/1000f)els
         }
     }else LazyColumn(Modifier.fillMaxSize(),state=listState,contentPadding=PaddingValues(horizontal=22.dp)) {
         if(bookmarks.isEmpty())item {EmptyNotice(if(query.isBlank())"留一枚书签。"else"没有匹配的书签。",if(query.isBlank())"阅读时点击书签，就能把这一页留在这里。"else"试试文件名、路径或仓库名。",Icons.Outlined.BookmarkBorder)}
-        items(bookmarks,key={it.key}){bookmark->Column(Modifier.fillMaxWidth().clickable {model.openBookmark(bookmark)}.padding(vertical=20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment=Alignment.CenterVertically){Icon(Icons.Outlined.BookmarkBorder,null,Modifier.size(17.dp),tint=Muted);Spacer(Modifier.width(10.dp));Text(bookmark.path.substringAfterLast('/'),fontSize=13.sp,fontFamily=FontFamily.Monospace,maxLines=1,overflow=TextOverflow.Ellipsis)}
-            Text("${bookmark.repo.fullName} · ${bookmark.ref}",fontSize=10.sp,color=Muted)
-            HorizontalDivider(Modifier.padding(top=10.dp),color=Rule)
-        }}
+        items(bookmarks,key={it.key}){bookmark->BookmarkRow(bookmark){model.openBookmark(bookmark)}}
     }
     }
+    }
+}
+
+@Composable private fun BookmarkRow(bookmark:Bookmark,onOpen:()->Unit) {
+    var expanded by rememberSaveable(bookmark.key){mutableStateOf(false)}
+    val directory=bookmark.path.substringBeforeLast('/',"")
+    val prefix=directory.substringBeforeLast('/',"")
+    val path=buildAnnotatedString {
+        if(directory.isNotEmpty())withStyle(SpanStyle(color=Muted)){append(directory);append('/')}
+        withStyle(SpanStyle(color=Ink)){append(bookmark.path.substringAfterLast('/'))}
+    }
+    Column(Modifier.fillMaxWidth().clickable(onClick=onOpen).padding(vertical=20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.Top) {
+            if(directory.isNotEmpty())IconButton(onClick={expanded=!expanded},modifier=Modifier.size(32.dp)) {
+                Icon(if(expanded)Icons.Outlined.FolderOpen else Icons.Outlined.Folder,
+                    if(expanded)"收起完整路径"else"展开完整路径",Modifier.size(17.dp),tint=Muted)
+            }else Box(Modifier.size(32.dp),contentAlignment=Alignment.Center) {
+                Icon(Icons.Outlined.BookmarkBorder,null,Modifier.size(17.dp),tint=Muted)
+            }
+            Spacer(Modifier.width(4.dp))
+            Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                if(expanded||prefix.isEmpty())Text(path,Modifier.fillMaxWidth().padding(top=6.dp),fontSize=13.sp,lineHeight=20.sp,fontFamily=FontFamily.Monospace,
+                    maxLines=if(expanded)Int.MAX_VALUE else 1,overflow=if(expanded)TextOverflow.Clip else TextOverflow.MiddleEllipsis)
+                else BoxWithConstraints(Modifier.fillMaxWidth().padding(top=6.dp)) {
+                    // Reserve the tail for the nearest directory and filename;
+                    // ellipsize the preceding path before cutting either of them.
+                    val tailWidth=maxWidth*.75f
+                    Row {
+                        Text(prefix,Modifier.weight(1f,fill=false),fontSize=13.sp,lineHeight=20.sp,fontFamily=FontFamily.Monospace,
+                            color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis)
+                        Text(path.subSequence(prefix.length,path.length),Modifier.widthIn(max=tailWidth),fontSize=13.sp,lineHeight=20.sp,
+                            fontFamily=FontFamily.Monospace,maxLines=1,overflow=TextOverflow.MiddleEllipsis)
+                    }
+                }
+                Text("${bookmark.repo.fullName} · ${bookmark.ref}",fontSize=10.sp,color=Muted)
+            }
+        }
+        HorizontalDivider(Modifier.padding(top=10.dp),color=Rule)
     }
 }
 
@@ -736,9 +773,7 @@ private fun formatCacheSize(bytes:Long):String=when {
 
 @Composable private fun ColumnScope.ReaderPage(s:GroveState,model:GroveViewModel,settings:()->Unit,toc:()->Unit,files:()->Unit,onLink:(String)->Unit,jump:String?) {
     s.openingDocument?.let{target->
-        val kind=when(target.path.substringAfterLast('.').lowercase()) {
-            "pdf"->PreviewKind.PDF;"epub"->PreviewKind.EPUB;else->null
-        }
+        val kind=streamedPreviewType(target.path)?.kind
         if(kind==null) {
             if(s.loading)LinearProgressIndicator(Modifier.fillMaxWidth().height(1.dp).testTag("document-loading"),color=Muted,trackColor=Rule)
             s.error?.let{ErrorNotice(it,model::retry)}
@@ -788,6 +823,9 @@ private fun formatCacheSize(bytes:Long):String=when {
     else if(doc.attachment?.kind==PreviewKind.EPUB)key(doc.key,doc.attachment.localPath){EpubPreview(doc,s.fontSize,s.warm,s.progress,{model.progress(doc.key,it)},onLink,epubContents,{epubContents=false},Modifier.weight(1f).fillMaxWidth()) {navigation->
         EpubReadingToolbar(navigation,s.progress,files,{epubContents=true},settings)
     }}
+    else if(doc.attachment?.kind==PreviewKind.MOBI)key(doc.key,doc.attachment.localPath){MobiPreview(doc,s.fontSize,s.warm,s.progress,{model.progress(doc.key,it)},onLink,epubContents,{epubContents=false},Modifier.weight(1f).fillMaxWidth()) {navigation->
+        EpubReadingToolbar(navigation,s.progress,files,{epubContents=true},settings)
+    }}
     else if(s.raw&&doc.sourceTooLarge)Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp)) {
         Text("SVG 源码超过 1 MB，请返回预览，长按保存原文件后查看。",fontSize=12.sp,color=Muted,lineHeight=22.sp)
     }
@@ -797,7 +835,7 @@ private fun formatCacheSize(bytes:Long):String=when {
         }
         if(doc.attachment==null)ReaderBackToTop(sourceVertical)
     } else DocumentReader(doc,s.fontSize,s.warm,s.progress,onLink,model::progress,model::setHeadings,jump,Modifier.weight(1f).fillMaxWidth(),onImage=model::previewImage,imageResource=model::imageResource,onImageLongPress=model::showImageActions,diagnostics=previewDiagnostics.takeIf{s.previewDiagnosticsEnabled})
-    if(doc.attachment?.kind!=PreviewKind.EPUB) {
+    if(doc.attachment?.kind?.ebook!=true) {
     HorizontalDivider(color=Rule)
     Row(Modifier.fillMaxWidth().padding(horizontal=12.dp),verticalAlignment=Alignment.CenterVertically) {
         TextButton(onClick=files){Icon(Icons.Outlined.AccountTree,null,Modifier.size(14.dp));Text(" 文件",fontSize=10.sp)}

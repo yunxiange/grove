@@ -58,6 +58,43 @@ class EpubArchiveTest {
         assertEquals(listOf("封面","序言","第一章","第二章"),book.chapters.map{it.title})
         assertEquals(listOf("OPS/text/front.xhtml","OPS/text/preface.xhtml","OPS/text/one.xhtml","OPS/text/two.xhtml"),book.chapters.map{it.path})
     }
+    @Test fun svgWrapperAndImagePageForTheSameDeclaredCoverAppearOnlyOnce() {
+        val entries=EpubFixture.frontMatterEntries().apply {
+            this["OPS/book.opf"]=getValue("OPS/book.opf")
+                .replace("</metadata>","""<meta name="cover" content="cover-image"/></metadata>""")
+                .replace("<manifest>","""<manifest><item id="cover-image" href="images/cover.svg" media-type="image/svg+xml"/><item id="cover-copy" href="text/cover-copy.xhtml" media-type="application/xhtml+xml"/>""")
+                .replace("<itemref idref=\"cover-page\"/>","""<itemref idref="cover-page"/><itemref idref="cover-copy"/>""")
+            this["OPS/text/front.xhtml"]="""<html xmlns="http://www.w3.org/1999/xhtml"><body><div><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 120"><image xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="../images/cover.svg" width="240" height="120"/></svg></div></body></html>"""
+            this["OPS/text/cover-copy.xhtml"]="""<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="../images/cover.svg" alt="Cover Image"/></body></html>"""
+            this["OPS/nav.xhtml"]=getValue("OPS/nav.xhtml").replace("<ol>","""<ol><li><a href="text/cover-copy.xhtml">封面</a></li>""")
+        }
+        withBook(entries){file->
+            val book=EpubArchive.open(file)
+            assertEquals(listOf("OPS/text/front.xhtml","OPS/text/preface.xhtml","OPS/text/one.xhtml","OPS/text/two.xhtml"),book.chapters.map{it.path})
+            assertEquals("OPS/text/front.xhtml",book.contents.first().link.path)
+            assertEquals("OPS/text/front.xhtml",book.pageAliases["OPS/text/cover-copy.xhtml"])
+        }
+        val epub3=entries.toMutableMap().apply {
+            this["OPS/book.opf"]=getValue("OPS/book.opf").replace(Regex("<guide>.*?</guide>"),"")
+                .replace("""<meta name="cover" content="cover-image"/>""","")
+                .replace("""id="cover-image" href="images/cover.svg""","""id="cover-image" properties="cover-image" href="images/cover.svg""")
+            this["OPS/text/two.xhtml"]="""<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="../images/cover.svg"/></body></html>"""
+        }
+        withBook(epub3){file->
+            val book=EpubArchive.open(file)
+            assertEquals(4,book.chapters.size)
+            assertEquals("OPS/text/two.xhtml",book.chapters.last().path) // Later illustrations are retained.
+        }
+        // A cover followed by a title/copyright page containing that image is not a duplicate.
+        entries["OPS/text/cover-copy.xhtml"]="""<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="../images/cover.svg"/><p>出版及版权信息</p></body></html>"""
+        withBook(entries){assertEquals(5,EpubArchive.open(it).chapters.size)}
+        // A different image-only page must also survive.
+        entries["OPS/text/cover-copy.xhtml"]="""<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="../images/other.svg"/></body></html>"""
+        withBook(entries){assertEquals(5,EpubArchive.open(it).chapters.size)}
+        // SVG fragments may select different views within the same resource.
+        entries["OPS/text/cover-copy.xhtml"]="""<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="../images/cover.svg#another-view"/></body></html>"""
+        withBook(entries){assertEquals(5,EpubArchive.open(it).chapters.size)}
+    }
     @Test fun epub3LandmarksAndPageSemanticsIdentifyTheCoverWithoutGuessingFromItsIndex() {
         for(landmark in listOf(false,true)) {
             val entries=EpubFixture.frontMatterEntries().apply {
@@ -72,7 +109,7 @@ class EpubArchiveTest {
     @Test fun pageDocumentTitleIsUsedAndUnnamedPagesDoNotReceiveInventedChapterNumbers() {
         for((html,expected) in listOf(
             """<html xmlns="http://www.w3.org/1999/xhtml"><head><title>版权 &amp; 许可</title></head><body><p>出版信息。</p></body></html>""" to "版权 & 许可",
-            """<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="../images/cover.svg"/></body></html>""" to "未命名页面"
+            """<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="../images/cover.svg"/></body></html>""" to ""
         )) {
             val entries=EpubFixture.frontMatterEntries().apply {
                 this["OPS/book.opf"]=getValue("OPS/book.opf").replace(Regex("<guide>.*?</guide>"),"")
@@ -88,6 +125,18 @@ class EpubArchiveTest {
             this["OPS/toc.ncx"]="""<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "https://example.invalid/ncx.dtd"><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap><navPoint><navLabel><text>开篇</text></navLabel><content src="text/one.xhtml"/></navPoint></navMap></ncx>"""
         }
         withBook(entries){assertEquals("开篇",EpubArchive.open(it).contents.first().title)}
+    }
+    @Test fun placeholderTocAndDocumentTitlesDoNotOverridePageHeadingsOrCreateAnUnknownHeader() {
+        val entries=EpubFixture.entries().apply {
+            this["OPS/nav.xhtml"]=getValue("OPS/nav.xhtml").replace("第一章","Unknown")
+            this["OPS/text/two.xhtml"]="""<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Untitled</title></head><body><p>没有标题的内容。</p></body></html>"""
+            this["OPS/nav.xhtml"]=getValue("OPS/nav.xhtml").replace("第二章","undefined")
+        }
+        withBook(entries){file->
+            val book=EpubArchive.open(file)
+            assertEquals(listOf("第一章",""),book.chapters.map{it.title})
+            assertTrue(book.contents.none{it.title in listOf("Unknown","undefined","未命名页面")})
+        }
     }
     @Test fun encryptedAndUnsafeArchivesFailClearly() {
         for((path,content) in listOf("META-INF/encryption.xml" to "<encryption/>","../outside" to "unsafe")) {

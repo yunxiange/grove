@@ -141,19 +141,21 @@ export function renderEpub(root,source,base,purifier) {
   const content=template.content;
   content.querySelectorAll('base,link,meta,audio,video,source,track').forEach(node=>node.remove());
   const localResource=value=>{
+    if(!value)return null;
     try{const resource=new URL(value,base);return resource.href.startsWith(bookRoot)?resource.href:null;}catch{return null;}
   };
+  const dataImage=value=>/^data:image\/(png|jpeg|gif|webp|bmp|avif);base64,/i.test(value);
   for(const img of content.querySelectorAll('img')){
     const src=img.getAttribute('src')||'';
     const local=localResource(src);
     if(local)img.setAttribute('src',local);
-    else if(!/^data:image\/(png|jpeg|gif|webp);base64,/i.test(src))img.removeAttribute('src');
+    else if(!dataImage(src))img.removeAttribute('src');
   }
   for(const node of content.querySelectorAll('image,use')){
     const href=node.getAttribute('href')||node.getAttribute('xlink:href')||'';
     if(!href.startsWith('#')){
       const local=localResource(href);
-      if(local){node.removeAttributeNS('http://www.w3.org/1999/xlink','href');node.setAttribute('href',local);}
+      if(local||dataImage(href)){node.removeAttributeNS('http://www.w3.org/1999/xlink','href');node.setAttribute('href',local||href);}
       else node.remove();
     }
   }

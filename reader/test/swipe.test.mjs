@@ -29,7 +29,7 @@ function fixture() {
     emit('touchend',[],[end],target);return move;
   };
   return {window,document,calls,point,emit,swipe,setCurrent:v=>current=v,setSelected:v=>selected=v,setScale:v=>scale=v,
-    close:()=>{stop();window.close();}};
+    present:stop.present,close:()=>{stop();window.close();}};
 }
 test('EPUB single-finger swipes request exactly one next or previous chapter',()=>{
   const f=fixture();try {
@@ -70,6 +70,73 @@ test('disabled readers, stale gestures and cancellation never navigate',()=>{
     f.emit('touchstart',[f.point(250,200)]);f.emit('touchmove',[f.point(100,200)]);
     f.emit('touchcancel',[]);f.emit('touchend',[],[f.point(100,200)]);
     assert.deepEqual(f.calls,[]);
+  }finally{f.close();}
+});
+test('an owned horizontal drag moves the paper before release while vertical and cancelled gestures reset it',()=>{
+  const f=fixture();try {
+    const article=f.document.querySelector('article');
+    f.emit('touchstart',[f.point(250,200)]);f.emit('touchmove',[f.point(180,202)]);
+    const sheet=f.document.querySelector('[data-reader-turn-snapshot]');
+    assert.equal(sheet.style.transform,'translate3d(-70px,0,0)','the frozen page follows the finger without a movement cap');
+    assert.equal(article.style.visibility,'hidden');
+    f.emit('touchcancel',[]);assert.equal(article.style.visibility,'');
+    assert.equal(f.document.querySelector('[data-reader-turn-snapshot]'),null);assert.deepEqual(f.calls,[]);
+    f.emit('touchstart',[f.point(250,200)]);f.emit('touchmove',[f.point(245,320)]);
+    assert.equal(article.style.transform,'');
+  }finally{f.close();}
+});
+test('reduced motion disables paper movement while keeping chapter navigation',()=>{
+  const f=fixture();try {
+    f.window.matchMedia=()=>({matches:true});
+    f.emit('touchstart',[f.point(250,200)]);f.emit('touchmove',[f.point(80,200)]);
+    assert.equal(f.document.querySelector('article').style.transform,'');
+    f.emit('touchend',[],[f.point(80,200)]);
+    assert.deepEqual(f.calls,[['chapter-1',1]]);
+  }finally{f.close();}
+});
+test('a chapter turn keeps the outgoing paper visible until the incoming page joins it',()=>{
+  const f=fixture();try {
+    const animations=[];
+    f.window.Element.prototype.animate=function(frames,options){animations.push({frames,options});return {cancel(){},finished:new Promise(()=>{})};};
+    f.swipe(-180);
+    const outgoing=f.document.querySelector('[data-reader-turn-snapshot]');
+    assert.ok(outgoing,'keep a visible outgoing sheet instead of only nudging the new text');
+    assert.equal(outgoing.getAttribute('aria-hidden'),'true');
+    f.present('chapter-2');
+    assert.ok(animations.some(a=>a.frames.at(-1).transform==='translate3d(-400px,0,0)'),'the old paper exits the viewport');
+    assert.ok(animations.some(a=>a.frames[0].transform.includes('220px')),'the incoming edge joins the outgoing edge');
+  }finally{f.close();}
+});
+test('first/last chapter boundaries do not start a turn or hide the paper',()=>{
+  const f=fixture();try {
+    f.setCurrent({id:'only-page',canSwipePrevious:false,canSwipeNext:false});
+    assert.equal(f.swipe(-180).defaultPrevented,false);assert.equal(f.swipe(180).defaultPrevented,false);
+    assert.deepEqual(f.calls,[]);assert.equal(f.document.querySelector('[data-reader-turn-snapshot]'),null);
+    assert.equal(f.document.querySelector('article').style.visibility,'');
+  }finally{f.close();}
+});
+test('a completed transition removes the frozen viewport and can be interrupted',async()=>{
+  const f=fixture();try {
+    let finish;
+    const finished=new Promise(resolve=>finish=resolve);
+    f.window.Element.prototype.animate=()=>({cancel(){},finished});
+    f.swipe(-180);f.present('chapter-2');finish();
+    await Promise.resolve();await Promise.resolve();
+    assert.equal(f.document.querySelector('[data-reader-turn-snapshot]'),null);
+    assert.equal(f.document.querySelector('article').style.visibility,'');
+    f.swipe(180);f.present('chapter-3');
+    f.emit('touchstart',[f.point(200,200)]);
+    assert.equal(f.document.querySelector('[data-reader-turn-snapshot]'),null);
+  }finally{f.close();}
+});
+test('an ignored chapter request restores the visible page instead of trapping it',()=>{
+  const f=fixture();try {
+    let timeout;
+    f.window.setTimeout=callback=>{timeout=callback;return 1;};
+    f.swipe(-180);assert.ok(f.document.querySelector('[data-reader-turn-snapshot]'));
+    timeout();
+    assert.equal(f.document.querySelector('[data-reader-turn-snapshot]'),null);
+    assert.equal(f.document.querySelector('article').style.visibility,'');
   }finally{f.close();}
 });
 test('the actual reader enables the gesture only for ready EPUB pages with native navigation',async()=>{
